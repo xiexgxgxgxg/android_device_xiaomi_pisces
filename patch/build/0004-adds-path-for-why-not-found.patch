@@ -1,0 +1,23 @@
+From ca77e98a9b8ea4e364849fc9efcc711e36103257 Mon Sep 17 00:00:00 2001
+From: Xuefer <xuefer@gmail.com>
+Date: Tue, 21 Apr 2015 09:55:10 +0800
+Subject: [PATCH 4/6] adds path for why not found
+
+Change-Id: I31fd06a8d1203a5a113f16b048b1438353b149c9
+---
+ core/definitions.mk | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/core/definitions.mk b/core/definitions.mk
+index 9085b24..37b8fa5 100644
+--- a/core/definitions.mk
++++ b/core/definitions.mk
+@@ -183,7 +183,7 @@ endef
+ define all-java-files-under
+ $(patsubst ./%,%, \
+   $(shell cd $(LOCAL_PATH) ; \
+-          find -L $(1) -name "*.java" -and -not -name ".*") \
++          find -L $(1) -name "*.java" -and -not -name ".*" || echo "cd $(LOCAL_PATH)=`pwd`; find $(1) got no file" >&2) \
+  )
+ endef
+ 
