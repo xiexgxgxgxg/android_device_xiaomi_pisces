@@ -12,11 +12,10 @@ DEVICE_PACKAGE_OVERLAYS += $(LOCAL_PATH)/overlay
 PRODUCT_CHARACTERISTICS := nosdcard
 
 PRODUCT_DEFAULT_PROPERTY_OVERRIDES += \
-    persist.sys.usb.config=adb \
-    persist.sys.isUsbOtgEnabled=1 \
+    persist.sys.usb.config=adb
 
 PRODUCT_PROPERTY_OVERRIDES += \
-    drm.service.enabled=true \
+    drm.service.enabled=true
 
 # permissions file from AOSP
 PRODUCT_COPY_FILES += \
@@ -44,7 +43,7 @@ PRODUCT_COPY_FILES += \
     frameworks/native/data/etc/android.hardware.wifi.xml:system/etc/permissions/android.hardware.wifi.xml \
     frameworks/native/data/etc/android.software.sip.voip.xml:system/etc/permissions/android.software.sip.voip.xml \
     frameworks/native/data/etc/android.software.sip.xml:system/etc/permissions/android.software.sip.xml \
-    frameworks/native/data/etc/handheld_core_hardware.xml:system/etc/permissions/handheld_core_hardware.xml \
+    frameworks/native/data/etc/handheld_core_hardware.xml:system/etc/permissions/handheld_core_hardware.xml
 
 # permissions file from vendor
 PRODUCT_COPY_FILES += \
@@ -56,10 +55,10 @@ PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/permissions/com.nvidia.nvstereoutils.xml:system/etc/permissions/com.nvidia.nvstereoutils.xml \
     $(LOCAL_PATH)/permissions/com.nvidia.wifi.xml:system/etc/permissions/com.nvidia.wifi.xml \
     $(LOCAL_PATH)/permissions/com.vzw.nfc.xml:system/etc/permissions/com.vzw.nfc.xml \
-    $(LOCAL_PATH)/permissions/org.simalliance.openmobileapi.xml:system/etc/permissions/org.simalliance.openmobileapi.xml \
+    $(LOCAL_PATH)/permissions/org.simalliance.openmobileapi.xml:system/etc/permissions/org.simalliance.openmobileapi.xml
 
 PRODUCT_COPY_FILES += \
-    $(call find-copy-subdir-files,*,$(LOCAL_PATH)/prebuilt/system,system) \
+    $(call find-copy-subdir-files,*,$(LOCAL_PATH)/prebuilt/system,system)
 
 # boot logo
 TARGET_BOOTANIMATION_HALF_RES := true
@@ -77,38 +76,38 @@ PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/ramdisk/init.nv_dev_board.usb.rc:root/init.nv_dev_board.usb.rc \
     $(LOCAL_PATH)/ramdisk/init.pisces.rc:root/init.pisces.rc \
     $(LOCAL_PATH)/ramdisk/init.quickboot.rc:root/init.quickboot.rc \
-    $(LOCAL_PATH)/ramdisk/ueventd.pisces.rc:root/ueventd.pisces.rc \
+    $(LOCAL_PATH)/ramdisk/ueventd.pisces.rc:root/ueventd.pisces.rc
 
 # safe mount_ext4, dualboot/mount helper script
 PRODUCT_COPY_FILES += \
-    $(LOCAL_PATH)/bin/mount_ext4.sh:system/bin/mount_ext4.sh \
+    $(LOCAL_PATH)/bin/mount_ext4.sh:system/bin/mount_ext4.sh
 
 PRODUCT_PACKAGES += \
-    dumpe2fs \
+    dumpe2fs
 
 # ril
 PRODUCT_PROPERTY_OVERRIDES += \
-    persist.radio.apm_sim_not_pwdn=1 \
+    persist.radio.apm_sim_not_pwdn=1
 
 # powerhal
-PRODUCT_PACKAGES += \
+PRODUCT_PACKAGES +=
 
 # gps
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/gps/gps.conf:system/etc/gps.conf \
     $(LOCAL_PATH)/gps/gpsconfigftm.xml:system/etc/gpsconfigftm.xml \
-    $(LOCAL_PATH)/gps/gpsconfig.xml:system/etc/gps/gpsconfig.xml \
+    $(LOCAL_PATH)/gps/gpsconfig.xml:system/etc/gps/gpsconfig.xml
 
 # bluetooth
 PRODUCT_COPY_FILES += \
-    $(LOCAL_PATH)/bluetooth/bt_vendor.conf:system/etc/bluetooth/bt_vendor.conf \
+    $(LOCAL_PATH)/bluetooth/bt_vendor.conf:system/etc/bluetooth/bt_vendor.conf
 
 # camera
-PRODUCT_PACKAGES += \
+PRODUCT_PACKAGES +=
 
 PRODUCT_COPY_FILES += \
     hardware/nvidia/pisces/camera/model_frontal.xml:system/etc/model_frontal.xml \
-    hardware/nvidia/pisces/camera/nvcamera.conf:system/etc/nvcamera.conf \
+    hardware/nvidia/pisces/camera/nvcamera.conf:system/etc/nvcamera.conf
 
 # media
 PRODUCT_COPY_FILES += \
@@ -117,14 +116,14 @@ PRODUCT_COPY_FILES += \
     frameworks/av/media/libstagefright/data/media_codecs_google_video.xml:system/etc/media_codecs_google_video.xml \
     $(LOCAL_PATH)/media/media_codecs.xml:system/etc/media_codecs.xml \
     $(LOCAL_PATH)/media/media_profiles.xml:system/etc/media_profiles.xml \
-    $(LOCAL_PATH)/media/enctune.conf:system/etc/enctune.conf \
+    $(LOCAL_PATH)/media/enctune.conf:system/etc/enctune.conf
 
 # Audio
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/audio/asound.conf:system/etc/asound.conf \
     $(LOCAL_PATH)/audio/audio_effects.conf:system/vendor/etc/audio_effects.conf \
     $(LOCAL_PATH)/audio/audio_policy.conf:system/etc/audio_policy.conf \
-    $(LOCAL_PATH)/audio/nvaudio_conf.xml:system/etc/nvaudio_conf.xml \
+    $(LOCAL_PATH)/audio/nvaudio_conf.xml:system/etc/nvaudio_conf.xml
 
 PRODUCT_PACKAGES += \
     audio.primary.tegra \
@@ -136,38 +135,38 @@ PRODUCT_PACKAGES += \
     tinycap \
     tinymix \
     tinypcminfo \
-    tinyplay \
+    tinyplay
 
 # Graphic
 PRODUCT_PACKAGES += \
     hwcomposer.tegra \
     libnvcap_video \
-    libnvomxadaptor \
+    libnvomxadaptor
 
 # Key layout
 PRODUCT_COPY_FILES += \
-    $(call find-copy-subdir-files,*,$(LOCAL_PATH)/keylayout,system/usr/keylayout) \
+    $(call find-copy-subdir-files,*,$(LOCAL_PATH)/keylayout,system/usr/keylayout)
 
 # Misc hardwares
 PRODUCT_PACKAGES += \
-    lights.pisces \
+    lights.pisces
 
 # Charger
 PRODUCT_PACKAGES += \
-    charger_res_images \
+    charger_res_images
 
 # QuickBoot
 PRODUCT_PACKAGES += \
-    QuickBoot \
+    QuickBoot
 
 PRODUCT_COPY_FILES += \
-    bootable/recovery/fonts/18x32.png:root/res/images/font.png \
+    bootable/recovery/fonts/18x32.png:root/res/images/font.png
 
 # Misc
 PRODUCT_PACKAGES += \
     librs_jni \
     libnetcmdiface  \
-    e2fsck \
+    e2fsck
 
 # NFC
 PRODUCT_PACKAGES += \
@@ -175,46 +174,49 @@ PRODUCT_PACKAGES += \
     NfcNci \
     Tag \
     com.android.nfc_extras \
-    SmartcardService \
+    SmartcardService
 
 # USB
 PRODUCT_PACKAGES += \
-    com.android.future.usb.accessory \
+    com.android.future.usb.accessory
 
 # Vibrator
 PRODUCT_PACKAGES += \
     immvibed \
     libImmVibeJ \
-    vibrator.pisces \
+    vibrator.pisces
 
 # Vendor Apps
 PRODUCT_PACKAGES += \
     AMAPNetworkLocation \
     Cit \
-    NvCPLSvc \
+    NvCPLSvc
 
 PRODUCT_PACKAGES += \
     libwpa_client \
     hostapd \
     dhcpcd.conf \
     wpa_supplicant \
-    wpa_supplicant.conf \
+    wpa_supplicant.conf
 
 PRODUCT_PACKAGES += \
     libshim_icuuc \
-    libshim_list \
+    libshim_list
 
 
 PRODUCT_PACKAGES += \
     android.hardware.graphics.composer@2.1-service \
     android.hardware.graphics.composer@2.1-impl \
-    libshim_atomic \
+    libshim_atomic
 
 PRODUCT_PACKAGES += \
     android.hardware.keymaster@3.0-service \
-    android.hardware.keymaster@3.0-impl \
+    android.hardware.keymaster@3.0-impl
 
 PRODUCT_COPY_FILES += \
     vendor/xiaomi/pisces/proprietary/lib/egl/libEGL_tegra.so:system/lib/egl/libEGL.so \
     vendor/xiaomi/pisces/proprietary/lib/egl/libGLESv1_CM_tegra.so:system/lib/egl/libGLESv1_CM.so \
     vendor/xiaomi/pisces/proprietary/lib/egl/libGLESv2_tegra.so:system/lib/egl/libGLESv2.so
+
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/usbdebug.sh:system/etc/usbdebug.sh
