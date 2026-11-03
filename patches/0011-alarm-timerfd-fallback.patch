@@ -1,8 +1,8 @@
 diff --git a/services/core/jni/com_android_server_AlarmManagerService.cpp b/services/core/jni/com_android_server_AlarmManagerService.cpp
-index 47350c11f95..9d50d6422a0 100644
+index 47350c11f95..2e6006c2ac1 100644
 --- a/services/core/jni/com_android_server_AlarmManagerService.cpp
 +++ b/services/core/jni/com_android_server_AlarmManagerService.cpp
-@@ -337,9 +337,32 @@ static jlong android_server_AlarmManagerService_init(JNIEnv*, jobject)
+@@ -337,9 +337,40 @@ static jlong android_server_AlarmManagerService_init(JNIEnv*, jobject)
      }
  
      for (size_t i = 0; i < fds.size(); i++) {
@@ -26,6 +26,14 @@ index 47350c11f95..9d50d6422a0 100644
 +            }
 +            ALOGW("pisces: timerfd_create(%d) unsupported, using %d", clock, fallback);
 +            fds[i] = timerfd_create(fallback, 0);
++            if (fds[i] < 0 && errno == EINVAL) {
++                ALOGW("pisces: timerfd_create(%d) unsupported, using CLOCK_MONOTONIC", fallback);
++                fds[i] = timerfd_create(CLOCK_MONOTONIC, 0);
++                if (fds[i] >= 0) {
++                    continue;
++                }
++                fallback = CLOCK_MONOTONIC;
++            }
 +            if (fds[i] >= 0) {
 +                continue;
 +            }
