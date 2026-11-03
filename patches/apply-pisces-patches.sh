@@ -3,10 +3,14 @@
 # Run from the root of the LineageOS 16.0 tree after repo sync.
 set -e
 ROOT=$(cd "$(dirname "$0")/../../../.." && pwd)
+P="$ROOT/device/xiaomi/pisces/patches"
 cd "$ROOT"
-echo "applying 0001-system-core-init-selinux.patch"
-git -C system/core apply "$OLDPWD/0001-system-core-init-selinux.patch" 2>/dev/null || \
-    git -C system/core apply "device/xiaomi/pisces/patches/0001-system-core-init-selinux.patch"
-echo "applying 0002-bionic-property-area.patch"
-git -C bionic apply "device/xiaomi/pisces/patches/0002-bionic-property-area.patch"
-echo "done"
+for p in 0001-system-core-init-selinux.patch:system/core \
+         0002-bionic-property-area.patch:bionic \
+         0003-libhwbinder-non-sg-transactions.patch:system/libhwbinder \
+         0004-hwservicemanager-skip-selinux.patch:system/hwservicemanager; do
+    patch="${p%%:*}"; dir="${p##*:}"
+    echo "== $patch -> $dir"
+    git -C "$dir" apply "$P/$patch"
+done
+echo "all patches applied"

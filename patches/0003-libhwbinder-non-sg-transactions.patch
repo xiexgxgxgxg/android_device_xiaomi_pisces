@@ -1,0 +1,33 @@
+diff --git a/IPCThreadState.cpp b/IPCThreadState.cpp
+index b36838e..81f68c7 100644
+--- a/IPCThreadState.cpp
++++ b/IPCThreadState.cpp
+@@ -627,7 +627,7 @@ status_t IPCThreadState::transact(int32_t handle,
+ 
+     LOG_ONEWAY(">>>> SEND from pid %d uid %d %s", getpid(), getuid(),
+         (flags & TF_ONE_WAY) == 0 ? "READ REPLY" : "ONE WAY");
+-    err = writeTransactionData(BC_TRANSACTION_SG, flags, handle, code, data, NULL);
++    err = writeTransactionData(BC_TRANSACTION, flags, handle, code, data, NULL);
+ 
+     if (err != NO_ERROR) {
+         if (reply) reply->setError(err);
+@@ -775,7 +775,7 @@ status_t IPCThreadState::sendReply(const Parcel& reply, uint32_t flags)
+ {
+     status_t err;
+     status_t statusBuffer;
+-    err = writeTransactionData(BC_REPLY_SG, flags, -1, 0, reply, &statusBuffer);
++    err = writeTransactionData(BC_REPLY, flags, -1, 0, reply, &statusBuffer);
+     if (err < NO_ERROR) return err;
+ 
+     return waitForResponse(NULL, NULL);
+@@ -1006,7 +1006,9 @@ status_t IPCThreadState::writeTransactionData(int32_t cmd, uint32_t binderFlags,
+     }
+ 
+     mOut.writeInt32(cmd);
+-    mOut.write(&tr_sg, sizeof(tr_sg));
++    // pisces: the 3.4 kernel has no BC_TRANSACTION_SG; send the plain
++    // binder_transaction_data (scatter-gather is only a buffer hint).
++    mOut.write(&tr_sg.transaction_data, sizeof(tr_sg.transaction_data));
+ 
+     return NO_ERROR;
+ }
