@@ -13,6 +13,8 @@ import init.modem_${ro.boot.modem}.rc
 import init.quickboot.rc
 
 on early-init
+    # the binderized mapper service breaks Gralloc2 (must be passthrough)
+    stop vendor.gralloc-2-0
     # pisces: 3.4 kernel uses the legacy android_usb gadget; adbd needs
     # functionfs mounted explicitly (the configfs path A9 defaults to does not
     # exist here).
@@ -87,6 +89,16 @@ on fs
     chmod 0400 /persist/serialno
 
 on post-fs-data
+    # pisces: vold does not run yet, so DE/CE app data dirs are missing.
+    # Create the ones used by system providers during boot.
+    mkdir /data/user_de 0771 system system
+    mkdir /data/user_de/0 0771 system system
+    mkdir /data/user_de/0/org.lineageos.lineagesettings 0700 system system
+    mkdir /data/user_de/0/org.lineageos.lineagesettings/databases 0700 system system
+    mkdir /data/user_de/0/com.android.providers.settings 0700 system system
+    mkdir /data/user_de/0/com.android.providers.settings/databases 0700 system system
+    mkdir /data/user 0771 system system
+    mkdir /data/user/0 0771 system system
     mkdir /data/misc/wifi 0770 wifi wifi
     mkdir /data/misc/wifi/sockets 0770 wifi wifi
     mkdir /data/misc/wifi/firmware 0770 wifi wifi
