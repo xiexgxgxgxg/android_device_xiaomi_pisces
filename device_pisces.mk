@@ -203,3 +203,7 @@ PRODUCT_PACKAGES += \
     libshim_icuuc \
     libshim_list \
 
+
+PRODUCT_PACKAGES += \
+    android.hardware.graphics.composer@2.1-service \
+    android.hardware.graphics.composer@2.1-impl \
