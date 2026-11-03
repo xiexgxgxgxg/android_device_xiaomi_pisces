@@ -104,8 +104,6 @@ PRODUCT_COPY_FILES += \
 
 # camera
 PRODUCT_PACKAGES += \
-    camera.pisces \
-    camera.vendor.tegra \
 
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/camera/model_frontal.xml:system/etc/model_frontal.xml \
