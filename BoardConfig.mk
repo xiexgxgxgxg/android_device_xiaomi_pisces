@@ -60,7 +60,7 @@ TARGET_KERNEL_SOURCE := kernel/xiaomi/pisces
 TARGET_KERNEL_CONFIG := tegra11_pisces_user_defconfig
 TARGET_KERNEL_ARCH := arm
 TARGET_KERNEL_CROSS_COMPILE_PREFIX := arm-linux-androideabi-
-KERNEL_TOOLCHAIN := $(ANDROID_BUILD_TOP)/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/bin
+KERNEL_TOOLCHAIN := $(CURDIR)/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/bin
 BOARD_KERNEL_IMAGE_NAME := zImage
 
 # Power
