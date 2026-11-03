@@ -1,0 +1,15 @@
+diff --git a/libc/bionic/system_property_api.cpp b/libc/bionic/system_property_api.cpp
+index 10d1bb325..fd6caf8e3 100644
+--- a/libc/bionic/system_property_api.cpp
++++ b/libc/bionic/system_property_api.cpp
+@@ -58,7 +58,9 @@ int __system_property_set_filename(const char*) {
+ __BIONIC_WEAK_FOR_NATIVE_BRIDGE
+ int __system_property_area_init() {
+   bool fsetxattr_failed = false;
+-  return system_properties.AreaInit(PROP_FILENAME, &fsetxattr_failed) && !fsetxattr_failed ? 0 : -1;
++  // pisces: SELinux policy is skipped on the 3.4 kernel, so the
++  // security.selinux xattr cannot be set; do not treat that as fatal.
++  return system_properties.AreaInit(PROP_FILENAME, &fsetxattr_failed) ? 0 : -1;
+ }
+ 
+ __BIONIC_WEAK_FOR_NATIVE_BRIDGE

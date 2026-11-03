@@ -673,3 +673,19 @@ on property:persist.force_fast_charge=0
 
 on property:persist.force_fast_charge=1
     write /sys/kernel/fast_charge/force_fast_charge 1
+
+# pisces: capture userspace boot logs to /cache so they can be pulled from
+# TWRP when adb is not available yet (suggested by community).
+service bootlog /system/bin/logcat -b all -D -f /cache/boot_log.txt
+    class main
+    user root
+    group root system
+    disabled
+    oneshot
+
+on property:init.svc.logd=running
+    rm /cache/boot_log.txt
+    start bootlog
+
+on property:sys.boot_completed=1
+    stop bootlog
