@@ -125,9 +125,9 @@ BOARD_HAVE_GPS_BCM := true
 BOARD_CHARGER_DISABLE_INIT_BLANK := true
 BOARD_CHARGER_ENABLE_SUSPEND := true
 BOARD_CHARGER_SHOW_PERCENTAGE := true
-BOARD_HAL_STATIC_LIBRARIES += libhealthd.pisces
+# libhealthd.pisces removed for Lineage 16 bring-up (old android_alarm.h)
 BOARD_RTC_WAKEALARM_PATH := /sys/class/rtc/rtc0/wakealarm
-BOARD_HEALTHD_CUSTOM_CHARGER_RES := $(LOCAL_PATH)/libhealthd/images
+# BOARD_HEALTHD_CUSTOM_CHARGER_RES removed for bring-up
 BACKLIGHT_PATH           := /sys/class/backlight/lm3533-backlight0/brightness
 SECONDARY_BACKLIGHT_PATH := /sys/class/backlight/lm3533-backlight1/brightness
 
