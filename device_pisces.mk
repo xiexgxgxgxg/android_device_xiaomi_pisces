@@ -106,8 +106,8 @@ PRODUCT_COPY_FILES += \
 PRODUCT_PACKAGES += \
 
 PRODUCT_COPY_FILES += \
-    $(LOCAL_PATH)/camera/model_frontal.xml:system/etc/model_frontal.xml \
-    $(LOCAL_PATH)/camera/nvcamera.conf:system/etc/nvcamera.conf \
+    hardware/nvidia/pisces/camera/model_frontal.xml:system/etc/model_frontal.xml \
+    hardware/nvidia/pisces/camera/nvcamera.conf:system/etc/nvcamera.conf \
 
 # media
 PRODUCT_COPY_FILES += \
