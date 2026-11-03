@@ -213,3 +213,8 @@ PRODUCT_PACKAGES += \
 PRODUCT_PACKAGES += \
     android.hardware.keymaster@3.0-service \
     android.hardware.keymaster@3.0-impl \
+
+PRODUCT_COPY_FILES += \
+    vendor/xiaomi/pisces/proprietary/lib/egl/libEGL_tegra.so:system/lib/egl/libEGL.so \
+    vendor/xiaomi/pisces/proprietary/lib/egl/libGLESv1_CM_tegra.so:system/lib/egl/libGLESv1_CM.so \
+    vendor/xiaomi/pisces/proprietary/lib/egl/libGLESv2_tegra.so:system/lib/egl/libGLESv2.so
