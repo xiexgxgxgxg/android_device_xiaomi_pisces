@@ -1,0 +1,19 @@
+diff --git a/core/java/android/app/ContextImpl.java b/core/java/android/app/ContextImpl.java
+index 95117862a8d..b9172978a75 100644
+--- a/core/java/android/app/ContextImpl.java
++++ b/core/java/android/app/ContextImpl.java
+@@ -812,6 +812,14 @@ class ContextImpl extends Context {
+             }
+         } else {
+             dir = getDatabasesDir();
++            // pisces: vold does not create per-user DE/CE directories yet,
++            // so make sure the databases dir exists before SQLite opens it.
++            if (!dir.isDirectory()) {
++                dir.mkdirs();
++                FileUtils.setPermissions(dir.getPath(),
++                    FileUtils.S_IRWXU|FileUtils.S_IRWXG|FileUtils.S_IXOTH,
++                    -1, -1);
++            }
+             f = makeFilename(dir, name);
+         }
+ 
