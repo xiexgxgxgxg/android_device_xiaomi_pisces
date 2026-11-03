@@ -13,7 +13,8 @@ for p in 0001-system-core-init-selinux.patch:system/core \
          0007-zygote-skip-selinux-setcontext.patch:frameworks/base \
          0008-contextimpl-create-db-dir.patch:frameworks/base \
          0009-installd-skip-restorecon.patch:frameworks/native \
-         0010-netd-break-zygote-loop.patch:system/netd; do
+         0010-netd-break-zygote-loop.patch:system/netd \
+         0011-alarm-timerfd-fallback.patch:frameworks/base; do
     patch="${p%%:*}"; dir="${p##*:}"
     echo "== $patch -> $dir"
     git -C "$dir" apply "$P/$patch"

@@ -1,0 +1,39 @@
+diff --git a/services/core/jni/com_android_server_AlarmManagerService.cpp b/services/core/jni/com_android_server_AlarmManagerService.cpp
+index 47350c11f95..9d50d6422a0 100644
+--- a/services/core/jni/com_android_server_AlarmManagerService.cpp
++++ b/services/core/jni/com_android_server_AlarmManagerService.cpp
+@@ -337,9 +337,32 @@ static jlong android_server_AlarmManagerService_init(JNIEnv*, jobject)
+     }
+ 
+     for (size_t i = 0; i < fds.size(); i++) {
+-        fds[i] = timerfd_create(android_alarm_to_clockid[i], 0);
++        clockid_t clock = android_alarm_to_clockid[i];
++        fds[i] = timerfd_create(clock, 0);
++        if (fds[i] < 0 && errno == EINVAL) {
++            // pisces: the 3.4 kernel has no alarm timerfd support; fall back
++            // to the non-wakeup clock so AlarmManagerService can start.
++            clockid_t fallback;
++            switch (clock) {
++            case CLOCK_REALTIME_ALARM:
++                fallback = CLOCK_REALTIME;
++                break;
++            case CLOCK_BOOTTIME_ALARM:
++                fallback = CLOCK_BOOTTIME;
++                break;
++            default:
++                fallback = CLOCK_MONOTONIC;
++                break;
++            }
++            ALOGW("pisces: timerfd_create(%d) unsupported, using %d", clock, fallback);
++            fds[i] = timerfd_create(fallback, 0);
++            if (fds[i] >= 0) {
++                continue;
++            }
++            clock = fallback;
++        }
+         if (fds[i] < 0) {
+-            log_timerfd_create_error(android_alarm_to_clockid[i]);
++            log_timerfd_create_error(clock);
+             close(epollfd);
+             for (size_t j = 0; j < i; j++) {
+                 close(fds[j]);
