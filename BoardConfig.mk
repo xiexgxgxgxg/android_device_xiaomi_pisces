@@ -79,7 +79,7 @@ BOARD_BLUETOOTH_BDROID_BUILDCFG_INCLUDE_DIR := $(LOCAL_PATH)/bluetooth
 
 # init
 INIT_MI3TD_HACK := true
-TARGET_INIT_VENDOR_LIB := libinit_pisces
+# TARGET_INIT_VENDOR_LIB removed for bring-up (A9 init headers are C++)
 
 # boot
 TARGET_BOOTANIMATION_TEXTURE_CACHE := true
