@@ -26,7 +26,8 @@ on init
 
     export EXTERNAL_STORAGE /storage/emulated/legacy
     export EMULATED_STORAGE_SOURCE /mnt/shell/emulated
-    export EMULATED_STORAGE_TARGET /storage/emulated
+    # pisces: no vold yet; zygote aborts if it tries to mount tmpfs there
+    # export EMULATED_STORAGE_TARGET /storage/emulated
     export SECONDARY_STORAGE /storage/usbdisk
 
     # Support legacy paths
