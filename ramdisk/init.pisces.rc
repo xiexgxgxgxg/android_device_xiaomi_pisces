@@ -689,3 +689,19 @@ on property:init.svc.logd=running
 
 on property:sys.boot_completed=1
     stop bootlog
+
+# pisces: persist the kernel log ring buffer to /cache as early as logd is up,
+# so early boot messages survive even a hard power cut / hang.
+service kmsglog /system/bin/logcat -b kernel -f /cache/kmsg.log
+    class main
+    user root
+    group root system
+    disabled
+    oneshot
+
+on property:init.svc.logd=running
+    rm /cache/kmsg.log
+    start kmsglog
+
+on property:sys.boot_completed=1
+    stop kmsglog
