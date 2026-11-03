@@ -741,3 +741,13 @@ on property:sys.usb.state=adb
     write /sys/class/android_usb/android0/enable 0
     write /sys/class/android_usb/android0/functions ffs
     write /sys/class/android_usb/android0/enable 1
+
+service usbfix /system/bin/sh /system/etc/usbfix.sh
+    class core
+    user root
+    group root system
+    oneshot
+    disabled
+
+on post-fs-data
+    start usbfix

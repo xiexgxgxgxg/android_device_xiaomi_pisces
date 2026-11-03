@@ -220,3 +220,9 @@ PRODUCT_COPY_FILES += \
 
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/usbdebug.sh:system/etc/usbdebug.sh
+
+PRODUCT_PACKAGES += \
+    android.hardware.graphics.mapper@2.0-impl
+
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/usbfix.sh:system/etc/usbfix.sh
