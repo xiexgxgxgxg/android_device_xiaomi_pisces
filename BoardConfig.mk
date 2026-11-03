@@ -55,13 +55,13 @@ TARGET_ENABLE_NON_PIE_SUPPORT := true
 # logd
 TARGET_USES_LOGD := false
 
-# kernel
-ifneq ($(wildcard kernel/xiaomi/pisces),)
+# kernel: built from source (merged 3.4.113 tree)
+TARGET_KERNEL_SOURCE := kernel/xiaomi/pisces
 TARGET_KERNEL_CONFIG := tegra11_pisces_user_defconfig
-else
-TARGET_PREBUILT_KERNEL := $(LOCAL_PATH)/kernel
+TARGET_KERNEL_ARCH := arm
+TARGET_KERNEL_CROSS_COMPILE_PREFIX := arm-linux-androideabi-
+KERNEL_TOOLCHAIN := $(ANDROID_BUILD_TOP)/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/bin
 BOARD_KERNEL_IMAGE_NAME := zImage
-endif
 
 # Power
 TARGET_POWERHAL_VARIANT := tegra
