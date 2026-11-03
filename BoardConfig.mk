@@ -64,7 +64,7 @@ KERNEL_TOOLCHAIN := $(CURDIR)/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-
 BOARD_KERNEL_IMAGE_NAME := zImage
 
 # Power
-TARGET_POWERHAL_VARIANT := tegra
+# TARGET_POWERHAL_VARIANT removed: no tegra power HAL in Android 9 tree
 
 # Audio
 USE_LEGACY_AUDIO_POLICY := 1

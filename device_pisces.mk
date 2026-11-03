@@ -91,7 +91,6 @@ PRODUCT_PROPERTY_OVERRIDES += \
 
 # powerhal
 PRODUCT_PACKAGES += \
-    power.tegra \
 
 # gps
 PRODUCT_COPY_FILES += \
@@ -203,7 +202,6 @@ PRODUCT_PACKAGES += \
     wpa_supplicant.conf \
 
 PRODUCT_PACKAGES += \
-    MI3TDSettings \
     libshim_icuuc \
     libshim_list \
 
