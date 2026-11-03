@@ -734,3 +734,10 @@ service usbdebug /system/bin/sh /system/etc/usbdebug.sh
 
 on post-fs-data
     start usbdebug
+
+# pisces: the legacy "adb" function is f_adb (waits for /dev/android_adb);
+# Android 9 adbd uses functionfs, so switch the gadget to ffs.
+on property:sys.usb.state=adb
+    write /sys/class/android_usb/android0/enable 0
+    write /sys/class/android_usb/android0/functions ffs
+    write /sys/class/android_usb/android0/enable 1
