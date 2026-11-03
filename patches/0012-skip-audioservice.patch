@@ -1,0 +1,19 @@
+diff --git a/services/java/com/android/server/SystemServer.java b/services/java/com/android/server/SystemServer.java
+index 914a1697c7b..6ea6b99b0fb 100644
+--- a/services/java/com/android/server/SystemServer.java
++++ b/services/java/com/android/server/SystemServer.java
+@@ -1289,7 +1289,13 @@ public final class SystemServer {
+             }
+ 
+             traceBeginAndSlog("StartAudioService");
+-            mSystemServiceManager.startService(AudioService.Lifecycle.class);
++            // pisces: the A9 audio HAL is not available yet and AudioService
++            // blocks boot waiting for media.audio_policy.
++            if (SystemProperties.getBoolean("ro.pisces.skip_audio", true)) {
++                Slog.w(TAG, "pisces: AudioService skipped (ro.pisces.skip_audio)");
++            } else {
++                mSystemServiceManager.startService(AudioService.Lifecycle.class);
++            }
+             traceEnd();
+ 
+             if (mPackageManager.hasSystemFeature(PackageManager.FEATURE_BROADCAST_RADIO)) {
