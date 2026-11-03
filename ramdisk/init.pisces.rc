@@ -13,6 +13,13 @@ import init.modem_${ro.boot.modem}.rc
 import init.quickboot.rc
 
 on early-init
+    # pisces: 3.4 kernel uses the legacy android_usb gadget; adbd needs
+    # functionfs mounted explicitly (the configfs path A9 defaults to does not
+    # exist here).
+    mkdir /dev/usb-ffs 0770 shell shell
+    mkdir /dev/usb-ffs/adb 0770 shell shell
+    mount functionfs adb /dev/usb-ffs/adb uid=2000,gid=2000
+    setprop sys.usb.ffs.aio_compat 1
     # pisces: vold is not functional yet; trigger the framework/bootanim path
     # manually once /data is mounted.
     write /sys/block/mmcblk0/queue/scheduler noop
