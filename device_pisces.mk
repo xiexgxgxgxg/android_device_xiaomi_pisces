@@ -226,3 +226,10 @@ PRODUCT_PACKAGES += \
 
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/usbfix.sh:system/etc/usbfix.sh
+
+PRODUCT_PACKAGES += \
+    android.hardware.graphics.allocator@2.0-service \
+    android.hardware.graphics.allocator@2.0-impl
+
+PRODUCT_COPY_FILES += \
+    vendor/xiaomi/pisces/proprietary/lib/hw/gralloc.tegra.so:system/vendor/lib/hw/gralloc.tegra.so
