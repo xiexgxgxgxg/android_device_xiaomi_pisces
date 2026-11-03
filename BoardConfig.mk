@@ -34,7 +34,7 @@ PRODUCT_PREBUILT_WEBVIEWCHROMIUM := yes
 BOARD_KERNEL_CMDLINE     += androidboot.hardware=$(TARGET_BOOTLOADER_BOARD_NAME)
 BOARD_KERNEL_BASE        := 0x10000000
 BOARD_KERNEL_PAGESIZE    := 2048
-BOARD_MKBOOTIMG_ARGS     := --ramdisk_offset 0x01000000 --tags_offset 0x00000100
+BOARD_MKBOOTIMG_ARGS     := --ramdisk_offset 0x02000000 --tags_offset 0x00000100
 
 # fix this up by examining /proc/mtd on a running device
 TARGET_USERIMAGES_USE_EXT4         := true
