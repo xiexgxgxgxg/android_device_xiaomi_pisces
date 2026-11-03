@@ -10,7 +10,8 @@ for p in 0001-system-core-init-selinux.patch:system/core \
          0003-libhwbinder-non-sg-transactions.patch:system/libhwbinder \
          0004-hwservicemanager-skip-selinux.patch:system/hwservicemanager \
          0005-servicemanager-skip-selinux.patch:frameworks/native \
-         0006-gles-log-missing-entry.patch:frameworks/native; do
+         0006-gles-log-missing-entry.patch:frameworks/native \
+         0007-zygote-skip-selinux-setcontext.patch:frameworks/base; do
     patch="${p%%:*}"; dir="${p##*:}"
     echo "== $patch -> $dir"
     git -C "$dir" apply "$P/$patch"
