@@ -1,0 +1,14 @@
+diff --git a/cmds/servicemanager/service_manager.c b/cmds/servicemanager/service_manager.c
+index 6b340a8d3..3a11cc1fd 100644
+--- a/cmds/servicemanager/service_manager.c
++++ b/cmds/servicemanager/service_manager.c
+@@ -63,6 +63,9 @@ static struct selabel_handle* sehandle;
+ 
+ static bool check_mac_perms(pid_t spid, uid_t uid, const char *tctx, const char *perm, const char *name)
+ {
++    /* pisces: no SELinux policy can be loaded on the 3.4 kernel. */
++    return true;
++
+     char *sctx = NULL;
+     const char *class = "service_manager";
+     bool allowed;

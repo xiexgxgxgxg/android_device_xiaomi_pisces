@@ -1,5 +1,5 @@
 diff --git a/AccessControl.cpp b/AccessControl.cpp
-index f47705d..0530057 100644
+index f47705d..872b760 100644
 --- a/AccessControl.cpp
 +++ b/AccessControl.cpp
 @@ -1,6 +1,7 @@
@@ -10,25 +10,21 @@ index f47705d..0530057 100644
  #include <hidl-util/FQName.h>
  #include <log/log.h>
  
-@@ -77,6 +78,10 @@ AccessControl::CallingContext AccessControl::getCallingContext(pid_t sourcePid)
+@@ -77,6 +78,8 @@ AccessControl::CallingContext AccessControl::getCallingContext(pid_t sourcePid)
  }
  
  bool AccessControl::checkPermission(const CallingContext& source, const char *targetContext, const char *perm, const char *interface) {
-+    // pisces: no SELinux policy on the 3.4 kernel, allow everything.
-+    if (is_selinux_enabled() <= 0) {
-+        return true;
-+    }
++    // pisces: no SELinux policy can be loaded on the 3.4 kernel; allow all.
++    return true;
      if (!source.sidPresent) {
          return false;
      }
-@@ -95,6 +100,10 @@ bool AccessControl::checkPermission(const CallingContext& source, const char *ta
+@@ -95,6 +98,8 @@ bool AccessControl::checkPermission(const CallingContext& source, const char *ta
  }
  
  bool AccessControl::checkPermission(const CallingContext& source, const char *perm, const char *interface) {
-+    // pisces: no SELinux policy on the 3.4 kernel, allow everything.
-+    if (is_selinux_enabled() <= 0) {
-+        return true;
-+    }
++    // pisces: no SELinux policy can be loaded on the 3.4 kernel; allow all.
++    return true;
      char *targetContext = nullptr;
      bool allowed = false;
  

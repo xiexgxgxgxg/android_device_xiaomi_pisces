@@ -8,7 +8,8 @@ cd "$ROOT"
 for p in 0001-system-core-init-selinux.patch:system/core \
          0002-bionic-property-area.patch:bionic \
          0003-libhwbinder-non-sg-transactions.patch:system/libhwbinder \
-         0004-hwservicemanager-skip-selinux.patch:system/hwservicemanager; do
+         0004-hwservicemanager-skip-selinux.patch:system/hwservicemanager \
+         0005-servicemanager-skip-selinux.patch:frameworks/native; do
     patch="${p%%:*}"; dir="${p##*:}"
     echo "== $patch -> $dir"
     git -C "$dir" apply "$P/$patch"
