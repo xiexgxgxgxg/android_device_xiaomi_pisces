@@ -1,0 +1,13 @@
+diff --git a/opengl/libs/EGL/Loader.cpp b/opengl/libs/EGL/Loader.cpp
+index 7f769114e..322923516 100644
+--- a/opengl/libs/EGL/Loader.cpp
++++ b/opengl/libs/EGL/Loader.cpp
+@@ -296,7 +296,7 @@ void Loader::init_api(void* dso,
+             }
+         }
+         if (f == NULL) {
+-            //ALOGD("%s", name);
++            ALOGE("pisces: missing GL/EGL entry point: %s", name);
+             f = (__eglMustCastToProperFunctionPointerType)gl_unimplemented;
+ 
+             /*

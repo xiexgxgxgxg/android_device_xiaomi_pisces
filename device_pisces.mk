@@ -20,6 +20,7 @@ PRODUCT_PROPERTY_OVERRIDES += \
 
 # permissions file from AOSP
 PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/egl.cfg:system/lib/egl/egl.cfg \
     frameworks/base/nfc-extras/com.android.nfc_extras.xml:system/etc/permissions/com.android.nfc_extras.xml \
     frameworks/native/data/etc/android.hardware.bluetooth_le.xml:system/etc/permissions/android.hardware.bluetooth_le.xml \
     frameworks/native/data/etc/android.hardware.camera.flash-autofocus.xml:system/etc/permissions/android.hardware.camera.flash-autofocus.xml \
