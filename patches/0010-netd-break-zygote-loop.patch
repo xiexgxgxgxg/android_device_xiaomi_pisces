@@ -1,0 +1,11 @@
+diff --git a/server/netd.rc b/server/netd.rc
+index 8100636..9945529 100644
+--- a/server/netd.rc
++++ b/server/netd.rc
+@@ -4,5 +4,5 @@ service netd /system/bin/netd
+     socket dnsproxyd stream 0660 root inet
+     socket mdns stream 0660 root system
+     socket fwmarkd stream 0660 root inet
+-    onrestart restart zygote
++    # pisces: do not restart zygote from netd; it loops with zygote onrestart
+     onrestart restart zygote_secondary
