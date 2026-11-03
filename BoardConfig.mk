@@ -175,3 +175,4 @@ BOARD_SEPOLICY_DIRS += $(LOCAL_PATH)/sepolicy
     healthd.te \
     ueventd.te
 
+BOARD_KERNEL_CMDLINE += loglevel=8 ignore_loglevel keep_bootcon
