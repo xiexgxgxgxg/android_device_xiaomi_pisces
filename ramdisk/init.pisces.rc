@@ -330,6 +330,11 @@ on boot
     chown system system /sys/class/input/input5/enabled
     chown system system /sys/class/input/input6/enabled
     chown system system /sys/class/power_supply/max170xx_battery/current_avg
+    # pisces: the A9 wifi HAL rewrites the firmware path to select the STA/AP
+    # image; the node is root-only by default, so the write fails and chip
+    # configuration aborts with ERROR_UNKNOWN.
+    chown wifi wifi /sys/module/bcmdhd/parameters/firmware_path
+    chmod 0660 /sys/module/bcmdhd/parameters/firmware_path
     chown system system /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq
     chown system system /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq
 

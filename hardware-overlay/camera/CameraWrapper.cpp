@@ -611,7 +611,11 @@ static int camera_device_open(const hw_module_t *module, const char *name,
         using namespace android;
         const String16 sensorServiceName("sensorservice");
         sp<ISensorServer> sensorServer;
-        for (int i = 0; i < 60; i++) {
+        // pisces: there is no sensors HAL on this device yet, and the sensor
+        // entry points the blob calls are stubbed by libpisces_camshim, so a
+        // short bounded wait is enough.  Waiting for the binder service here
+        // blocked camera provider start-up for minutes.
+        for (int i = 0; i < 3; i++) {
             status_t err = getService(sensorServiceName, &sensorServer);
             if (err == NAME_NOT_FOUND) {
                 ALOGI("Waiting for sensorservice ...");
@@ -619,7 +623,8 @@ static int camera_device_open(const hw_module_t *module, const char *name,
                 continue;
             }
             if (err != NO_ERROR) {
-                return err;
+                ALOGW("getService(sensorservice) failed: %d, continuing", err);
+                break;
             }
             break;
         }

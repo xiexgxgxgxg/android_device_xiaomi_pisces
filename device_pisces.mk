@@ -290,6 +290,12 @@ PRODUCT_PACKAGES += \
     libyuv \
     libpisces_camshim
 
+# ...and an app to drive it: Lineage's Snap plus the AOSP Camera2 as a fallback
+# (the legacy 1.0 HAL only offers camera2 in LEGACY mode).
+PRODUCT_PACKAGES += \
+    Snap \
+    Camera2
+
 PRODUCT_COPY_FILES += \
     vendor/xiaomi/pisces/proprietary/lib/hw/camera.tegra.so:system/vendor/lib/hw/camera.vendor.tegra.so
 
