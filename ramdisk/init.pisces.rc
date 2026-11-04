@@ -569,6 +569,18 @@ service dns_masq /system/bin/dnsmasq --no-daemon --no-resolv --no-poll --dhcp-op
     disabled
     oneshot
 
+# pisces: rild needs the pre-M libcutils socket_loopback_client() (the vendor
+# libril-xiaomi-sprd.so references it) and 3.4 cannot use the stock rc's
+# "capabilities" line, so the service is defined here instead.  init parses
+# this file before /vendor/etc/init, so this definition wins.
+service ril-daemon /vendor/bin/hw/rild
+    class main
+    user radio
+    group radio cache inet misc audio log readproc wakelock
+    socket rild stream 660 root radio
+    socket rild-debug stream 660 radio system
+    setenv LD_PRELOAD /system/lib/libpisces_rilshim.so
+
 # pisces: the stock rc starts this HAL with "group wifi gps".  With
 # CONFIG_ANDROID_PARANOID_NETWORK the socket(AF_INET) it needs is denied
 # without the inet group, and this kernel (3.4) has no ambient capabilities so

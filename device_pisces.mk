@@ -81,7 +81,9 @@ PRODUCT_COPY_FILES += \
 
 # safe mount_ext4, dualboot/mount helper script
 PRODUCT_COPY_FILES += \
-    $(LOCAL_PATH)/bin/mount_ext4.sh:system/bin/mount_ext4.sh
+    $(LOCAL_PATH)/bin/mount_ext4.sh:system/bin/mount_ext4.sh \
+    $(LOCAL_PATH)/bin/fild:system/bin/fild \
+    $(LOCAL_PATH)/bin/fdl:system/bin/fdl
 
 PRODUCT_PACKAGES += \
     dumpe2fs
@@ -288,7 +290,8 @@ PRODUCT_PACKAGES += \
     camera.device@3.4-impl \
     camera.device@3.4-external-impl \
     libyuv \
-    libpisces_camshim
+    libpisces_camshim \
+    libpisces_rilshim
 
 # ...and an app to drive it: Lineage's Snap plus the AOSP Camera2 as a fallback
 # (the legacy 1.0 HAL only offers camera2 in LEGACY mode).

@@ -1,14 +1,11 @@
-# Copyright (c) 2012 NVIDIA Corporation.  All Rights Reserved.
-#
-# NVIDIA Corporation and its licensors retain all intellectual property and
-# proprietary rights in and to this software and related documentation.  Any
-# use, reproduction, disclosure or distribution of this software and related
-# documentation without an express license agreement from NVIDIA Corporation
-# is strictly prohibited.
+# Spreadtrum modem bring-up for the Mi 3 TD.
+# Rewritten for Android 9 init: the stock file used the 4.x-only
+# "service_redefine" keyword (which makes init reject the whole block) and the
+# "class_start:main" trigger (which does not exist in A9 either).
 
 on init
     setprop rild.libpath /system/lib/libril-xiaomi-sprd.so
-    setprop rild.libargs "-r ts0710mux10 -r ts0710mux11 -r ts0710mux4"
+    setprop rild.libargs "-d /dev/ts0710mux0"
     setprop mdm.diag_path /sdcard/offline_log/
     setprop mdm.diag_port /dev/ttyHS0
     setprop ril.ecclist "112,000,110,118,119,911,999,120,122"
@@ -17,27 +14,17 @@ on init
     chown system radio /sys/class/spi_master/spi0/spi0.0/reset
     chown root radio /sys/class/spi_master/spi0/spi0.0/assert
 
-service_redefine ril-daemon /system/bin/rild
-    class noautostart
-    socket rild stream 660 root radio
-    socket rild-debug stream 660 radio system
-    user root
-    group radio cache inet misc audio sdcard_rw qcom_diag log
-    disabled
-
+# fild loads fdl1.bin/modem_zip.bin into the modem over SPI and keeps the
+# modem alive; without it RIL_Init cannot open a channel and rild gives up.
 service fil-daemon /system/bin/fild
-    class fil_daemon
+    class core
     user root
     group root radio
-    onrestart stop ril-daemon
+    disabled
 
-on class_start:main
-    stop ril-daemon
+on boot
     write /sys/class/spi_master/spi0/spi0.0/reset 1
-    class_start fil_daemon
-
-on property:init.svc.fil-daemon=stopping
-    stop ril-daemon
+    start fil-daemon
 
 on property:ro.radio.noril=1
     stop fil-daemon
