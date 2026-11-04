@@ -209,7 +209,31 @@ State: `dumpsys wifi` = enabled, supplicant has the STA interface
   HAL fails in `NvCameraHalBlockHelpers` ("Component handle is invalid") and
   returns NvError 0x3 (NotFound) from `setupHalInLock`.
 
-### Bluetooth — firmware loads, HCI does not answer
+### Bluetooth — WORKS (session 3)
+
+Three separate bugs, all fixed:
+
+1. **No `vnd_pisces.txt`.**  libbt-vendor was built from `vnd_generic.txt`,
+   which does not set `UART_TARGET_BAUD_RATE`, so it used the 3000000 default
+   from `bt_vendor_brcm.h`.  The BCM43341 never followed that switch - after
+   the firmware config it still answered HCI Reset at 115200 and answered
+   nothing at 3 Mbit (verified with a raw `01 03 0c 00` probe on the tty).
+   `include/vnd_pisces.txt` now pins the rate to 115200.
+2. **The HCD download hangs the chip.**  After libbt downloads
+   `bcm43341.hcd` the controller stops answering HCI at *any* baud until
+   BT_REG_ON is power cycled (`echo 0/1 > /sys/class/rfkill/rfkill0/state`
+   brings it back).  `hardware.c` honours `persist.pisces.bt.skip_fw` (set from
+   `init.pisces.rc`) and skips the download; the ROM firmware speaks HCI.
+3. **The app crashed on start-up**: PBAP opened ContactsProvider2 without
+   READ_CONTACTS -> `SecurityException` -> AdapterService restart loop -> the
+   adapter stayed OFF.  `/system/etc/default-permissions/pisces-bluetooth.xml`
+   pre-grants the runtime permissions.
+
+`dumpsys bluetooth_manager` now reports `enabled: true`, `state: ON` with the
+controller's real address, stable across reboots.  Remaining noise: one
+unsupported vendor command (0xfc27) logged as "no matching command".
+
+### Bluetooth — historical note (before session 3)
 
 - `bdaddr` and `rfkill0` handled; the adapter now reports
   00:22:33:44:77:00, libbt downloads the firmware
