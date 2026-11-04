@@ -1,6 +1,6 @@
 # LineageOS 16.0 (pisces) bring-up status
 
-Updated: 2026-11-04 06:35
+Updated: 2026-11-04 08:10
 
 ## Working
 
@@ -21,18 +21,24 @@ Updated: 2026-11-04 06:35
   AlarmManager/ConsumerIr, then has to be looked at further
 - installd: restorecon made a no-op (no policy on 3.4)
 
-## Current blockers (2026-11-04 06:35)
+## Current blockers (2026-11-04 08:10)
 
-1. zygote <-> netd restart loop: netd and zygote each had `onrestart restart`
-   on the other; once one died the whole framework reset every ~10 s.
-   Patch 0010 removes netd -> zygote (zygote -> netd kept).
-   Not yet verified on device (device was stuck in recovery with adb offline).
-2. audioserver crash loop (`AudioFlinger::loadHwModule_l`, missing audio HAL).
+1. Audio HAL missing: A9 audioserver loads the legacy audio_policy blob and
+   crashes, so media.audio_policy never appears. AudioService is currently
+   skipped (patch 0012) and audio clients get null IAudioService
+   (patches 0013/0014 guard two of them).
+2. Boot now reaches MediaProjectionManagerService but MediaRouter's
+   IMediaRouterService is still null at that point (wrong/blocked service
+   ordering), so system_server aborts there. Either start MediaRouterService
+   earlier, make MediaRouter tolerate null, or provide a stub IAudioService /
+   real audio HAL so the normal ordering is restored.
 3. gps-daemon exits immediately: `glgps_nvidiaTegra2android` needs
    android::Singleton<SensorManager>::sInstance (removed in A9).
-4. /data/user_de/0 keeps being emptied by the missing vold; current workaround
-   is ContextImpl creating the databases dir on demand (patch 0008).
-5. vold does not run at all (open issue).
+4. vold does not run at all; /data/user_de/0 is populated ad hoc by
+   ContextImpl (patch 0008).
+5. Kernel lacks timerfd CLOCK_*_ALARM/CLOCK_BOOTTIME support; AlarmManager
+   now falls back to CLOCK_REALTIME/MONOTONIC (patch 0011). Alarms cannot
+   wake the device from suspend until the kernel side is backported.
 
 ## Source patches (device/xiaomi/pisces/patches)
 
@@ -45,13 +51,20 @@ Updated: 2026-11-04 06:35
 - 0008 frameworks/base: ContextImpl creates databases dir
 - 0009 frameworks/native installd: restorecon is a no-op
 - 0010 system/netd: do not restart zygote from netd
+- 0011 frameworks/base AlarmManager JNI: timerfd alarm clock fallback
+- 0012 frameworks/base SystemServer: allow skipping AudioService
+- 0013 frameworks/base AudioPlayerStateMonitor: tolerate null AudioService
+- 0014 frameworks/base MediaRouter: tolerate null AudioService
 
 Apply with `patches/apply-pisces-patches.sh` after repo sync.
 
 ## Next steps
 
-- Verify patch 0010 on device (reboot, watch `sys.boot_completed`)
-- Fix audioserver: build android.hardware.audio@2.0 service or stub the HAL
-- Fix gps-daemon: shim SensorManager::sInstance or drop the binary
-- Make vold work (fstab/userdata) or keep patching around it
-- Then UI/launcher, display composition and hardware feature bring-up
+- Provide a stub IAudioService (or a working audio HAL) so MediaRouterService,
+  MediaProjectionManagerService and others see a non-null audio service.
+- Check why IMediaRouterService is not published when MediaProjectionManager
+  starts (service ordering / earlier failure).
+- Backport timerfd CLOCK_*_ALARM + CLOCK_BOOTTIME to the 3.4 kernel, then drop
+  the AlarmManager fallback.
+- Fix gps-daemon (SensorManager::sInstance shim) and vold.
+- Then launcher/UI, composition, camera/sensors/wifi bring-up.

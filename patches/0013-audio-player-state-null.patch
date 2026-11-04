@@ -1,0 +1,15 @@
+diff --git a/services/core/java/com/android/server/media/AudioPlayerStateMonitor.java b/services/core/java/com/android/server/media/AudioPlayerStateMonitor.java
+index 648c782a7d1..19f49bb4f44 100644
+--- a/services/core/java/com/android/server/media/AudioPlayerStateMonitor.java
++++ b/services/core/java/com/android/server/media/AudioPlayerStateMonitor.java
+@@ -276,6 +276,10 @@ class AudioPlayerStateMonitor extends IPlaybackConfigDispatcher.Stub {
+     }
+ 
+     public void registerSelfIntoAudioServiceIfNeeded(IAudioService audioService) {
++        // pisces: AudioService may be disabled during bring-up.
++        if (audioService == null) {
++            return;
++        }
+         synchronized (mLock) {
+             try {
+                 if (!mRegisteredToAudioService) {

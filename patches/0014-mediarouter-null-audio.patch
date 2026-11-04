@@ -1,0 +1,20 @@
+diff --git a/media/java/android/media/MediaRouter.java b/media/java/android/media/MediaRouter.java
+index 70ab8632a88..a58677c7645 100644
+--- a/media/java/android/media/MediaRouter.java
++++ b/media/java/android/media/MediaRouter.java
+@@ -161,9 +161,12 @@ public class MediaRouter {
+             mDisplayService.registerDisplayListener(this, mHandler);
+ 
+             AudioRoutesInfo newAudioRoutes = null;
+-            try {
+-                newAudioRoutes = mAudioService.startWatchingRoutes(mAudioRoutesObserver);
+-            } catch (RemoteException e) {
++            // pisces: AudioService may be unavailable during bring-up.
++            if (mAudioService != null) {
++                try {
++                    newAudioRoutes = mAudioService.startWatchingRoutes(mAudioRoutesObserver);
++                } catch (RemoteException e) {
++                }
+             }
+             if (newAudioRoutes != null) {
+                 // This will select the active BT route if there is one and the current
