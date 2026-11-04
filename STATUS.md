@@ -1,6 +1,6 @@
 # LineageOS 16.0 (pisces) bring-up status
 
-Updated: 2026-11-04 17:45
+Updated: 2026-11-04 18:15
 
 ## What works now
 
@@ -28,15 +28,27 @@ framework after a while. Symptoms in logs:
 - `OpenGLRenderer: Failed to create EGLSurface ... EGL_BAD_ALLOC`
 - SystemUI then crashes in a loop; AMS eventually kills the system process.
 
-The nvmap FROM_ID permission issue is fixed; what remains is an intermittent
-ENOMEM inside the legacy gralloc `registerBuffer`. Planned directions:
+The nvmap FROM_ID permission issue is fixed (verified: imports return 0).
+What remains is the legacy gralloc `registerBuffer` failing with -ENOMEM for
+buffers allocated with usage 0x900 (HW_COMPOSER|HW_RENDER). Measurements:
 
-1. Instrument gralloc's handle table/bookkeeping (blob, so limited) or
-   reproduce with a native allocate+import test.
-2. Consider allocating buffers locally in SurfaceFlinger (bypass the
-   cross-process allocator/import path) or switching the allocator to a
-   passthrough path.
-3. Once SystemUI stops crashing, re-run the SetupWizard flow.
+- after restarting allocator+SF: 147 imports / 32 failures (~22%);
+- adding a retry loop (8x2ms) did not help: the failures are deterministic;
+- adding HW_TEXTURE or HW_FB to the usage did not change the failure rate;
+- failures carry gralloc handle ints `data[0]` that increase monotonically
+  (143,148,153,...), which suggests an internal tracking table/counter.
+
+Result: SystemUI keeps crashing (`EGL_BAD_ALLOC`), the device ends up with
+load average >14 and a black screen with backlight on.
+
+Next session plan:
+
+1. Implement local gralloc0 allocation in SurfaceFlinger/libui (allocate and
+   register in the same process) to bypass the cross-process import that the
+   legacy blob mishandles.
+2. Alternatively identify the gralloc table limit and patch the blob's
+   expectations (e.g. always allocate through the framebuffer/carveout path).
+3. Only then re-run SetupWizard; after that, finish BT/NFC + HALs.
 
 ## Commits
 
