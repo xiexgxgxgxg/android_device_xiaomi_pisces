@@ -28,4 +28,5 @@ apply 0016-soundtrigger-bounded-wait.patch          frameworks/av
 apply 0017-audiomanager-ringer-null.patch           frameworks/base
 apply 0018-sdcard-bind-fallback.patch               system/core
 apply 0020-vold-accept-bind-emulated.patch          system/vold
+apply 0021-keystore-state-soft.patch               frameworks/base
 echo "all patches applied"

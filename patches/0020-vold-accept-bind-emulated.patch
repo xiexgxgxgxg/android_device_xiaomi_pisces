@@ -15,56 +15,54 @@ index 6d6adee..5fb0a60 100644
      return true;
  }
 diff --git a/model/EmulatedVolume.cpp b/model/EmulatedVolume.cpp
-index 31c3924..e8bece0 100644
+index 31c3924..ae99883 100644
 --- a/model/EmulatedVolume.cpp
 +++ b/model/EmulatedVolume.cpp
-@@ -102,13 +102,21 @@ status_t EmulatedVolume::doMount() {
+@@ -102,17 +102,10 @@ status_t EmulatedVolume::doMount() {
          return -errno;
      }
  
 -    nsecs_t start = systemTime(SYSTEM_TIME_BOOTTIME);
-+    // pisces: this kernel has no CLOCK_BOOTTIME, so systemTime() cannot be
-+    // used for the timeout; count iterations instead.
-+    int wait_tries = 0;
-     while (before == GetDevice(mFuseWrite)) {
-         LOG(VERBOSE) << "Waiting for FUSE to spin up...";
-         usleep(50000); // 50ms
- 
+-    while (before == GetDevice(mFuseWrite)) {
+-        LOG(VERBOSE) << "Waiting for FUSE to spin up...";
+-        usleep(50000); // 50ms
+-
 -        nsecs_t now = systemTime(SYSTEM_TIME_BOOTTIME);
 -        if (nanoseconds_to_milliseconds(now - start) > 5000) {
-+        if (++wait_tries > 100) {
-+            // pisces: the 3.4 kernel has no sdcardfs and our sdcard daemon
-+            // falls back to bind mounts, which keep the same device number.
-+            // If the daemon is still alive, treat the storage as ready.
-+            if (TEMP_FAILURE_RETRY(waitpid(mFusePid, nullptr, WNOHANG)) == 0) {
-+                LOG(WARNING) << "Assuming bind-mounted emulated storage is ready";
-+                return OK;
-+            }
-             LOG(WARNING) << "Timed out while waiting for FUSE to spin up";
-             return -ETIMEDOUT;
-         }
+-            LOG(WARNING) << "Timed out while waiting for FUSE to spin up";
+-            return -ETIMEDOUT;
+-        }
+-    }
++    // pisces: the 3.4 kernel has no sdcardfs nor CLOCK_BOOTTIME; storage is
++    // bind-mounted by our sdcard fallback, so just give it a moment and go on.
++    usleep(200000);
++    LOG(WARNING) << "Assuming bind-mounted storage is ready";
+     /* sdcardfs will have exited already. FUSE will still be running */
+     if (TEMP_FAILURE_RETRY(waitpid(mFusePid, nullptr, WNOHANG)) == mFusePid)
+         mFusePid = 0;
 diff --git a/model/PublicVolume.cpp b/model/PublicVolume.cpp
-index 11fa2c6..fe88606 100644
+index 11fa2c6..324b4dd 100644
 --- a/model/PublicVolume.cpp
 +++ b/model/PublicVolume.cpp
-@@ -220,13 +220,17 @@ status_t PublicVolume::doMount() {
+@@ -220,17 +220,10 @@ status_t PublicVolume::doMount() {
          return -errno;
      }
  
 -    nsecs_t start = systemTime(SYSTEM_TIME_BOOTTIME);
-+    // pisces: no CLOCK_BOOTTIME on this kernel, count iterations instead.
-+    int wait_tries = 0;
-     while (before == GetDevice(mFuseWrite)) {
-         LOG(VERBOSE) << "Waiting for FUSE to spin up...";
-         usleep(50000); // 50ms
- 
+-    while (before == GetDevice(mFuseWrite)) {
+-        LOG(VERBOSE) << "Waiting for FUSE to spin up...";
+-        usleep(50000); // 50ms
+-
 -        nsecs_t now = systemTime(SYSTEM_TIME_BOOTTIME);
 -        if (nanoseconds_to_milliseconds(now - start) > 5000) {
-+        if (++wait_tries > 100) {
-+            if (TEMP_FAILURE_RETRY(waitpid(mFusePid, nullptr, WNOHANG)) == 0) {
-+                LOG(WARNING) << "Assuming bind-mounted storage is ready";
-+                return OK;
-+            }
-             LOG(WARNING) << "Timed out while waiting for FUSE to spin up";
-             return -ETIMEDOUT;
-         }
+-            LOG(WARNING) << "Timed out while waiting for FUSE to spin up";
+-            return -ETIMEDOUT;
+-        }
+-    }
++    // pisces: the 3.4 kernel has no sdcardfs nor CLOCK_BOOTTIME; storage is
++    // bind-mounted by our sdcard fallback, so just give it a moment and go on.
++    usleep(200000);
++    LOG(WARNING) << "Assuming bind-mounted storage is ready";
+     /* sdcardfs will have exited already. FUSE will still be running */
+     if (TEMP_FAILURE_RETRY(waitpid(mFusePid, nullptr, WNOHANG)) == mFusePid)
+         mFusePid = 0;
