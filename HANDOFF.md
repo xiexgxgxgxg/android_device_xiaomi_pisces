@@ -255,6 +255,50 @@ is alive (+ECSQ unsolicited every 5 s).  Making calls/data work would mean
 adapting the vendor RIL to the RIL v9+ structures (CardStatus, CellInfo,
 SignalStrength, ...) - a real porting job, not a one-liner.
 
+## Camera, session 3: where it stands
+
+Fixed since the last notes:
+
+- `libpisces_camshim` is C++ now.  The 2013 HAL calls the five
+  SensorEventQueue methods (`getFd`, `read`, `enableSensor`, `disableSensor`,
+  `setEventRate`) by *symbol*, not through a vtable, so the shim can hand the
+  blob any object: it returns a real queue when a sensors HAL exists and a
+  bare RefBase otherwise, with the five symbols forwarding to libsensor.
+  `NvCameraHalCore: Fail to initialize SensorListener` is gone.
+- The target-SDK-22 constructor has to stay in the shim; without it
+  `libFaceProc.so` fails to load with text relocations.
+
+What the trace shows now (`strace -f -y` on the provider):
+
+1. `/dev/imx135` opens fine (a stale manual provider instance had it with
+   EBUSY and was poisoning tests - kill it before tracing).
+2. `/dev/nvhost-vi`, `/dev/nvhost-isp`, `/dev/knvmap`, `/dev/tegra_sema`,
+   `/dev/tegra_rpc` are all opened.
+3. The NvMM camera/DZ/JPEG blocks then wait on `/dev/tegra_sema`
+   (`TEGRA_SEMA_IOCTL_WAIT`, magic 'r', nr 0x30) and that wait **times out
+   after 5 s**, which is the `setupHalInLock:539 Error: 0x3`.
+
+Root cause of the semaphore timeout: the camera's TRPC goes to the
+`avp-remote` node, which is registered by `drivers/media/video/tegra/avp/avp.c`
+(`CONFIG_TEGRA_AVP`).  That option is **off**, so only the `local` TRPC node
+exists.  Turning it on does register `avp-remote` and the semaphore waits do
+work - but `avp.c` reserves the AVP boot window at 0x0ff00000 and then
+`nvavp` cannot create its OS handle (`nvavp: cannot create os handle`,
+`-ENOMEM`), so `/dev/tegra_avpchannel` disappears and the HAL aborts even
+earlier.  Moving nvavp to the alternate address fails too (0x0eff00000 is
+outside the AVP IOVM window; the vendor's `nvavp_os_eff00000.bin` is for
+another tegra variant).
+
+So the camera needs both the `avp-remote` TRPC node and the nvavp channel, and
+a single AVP cannot serve both as the drivers are written.  Next ideas, in
+order of promise:
+
+- Port `avp.c` to register only the TRPC node and let `nvavp` own the AVP,
+  i.e. find where the stock used one driver for both (the MIUI 4.x kernel).
+- Or add the TRPC service to the nvavp OS (that is what the 4.x NvMM did:
+  `nvavp_os_0ff00000.bin` plausibly carries the trpc service).
+- Verify against a stock boot: `dmesg | grep -i 'trpc_node_register'` on MIUI.
+
 ## Next steps
 
 1. WiFi: instrument `libwifi-hal-bcm`'s `wifi_initialize()` /
