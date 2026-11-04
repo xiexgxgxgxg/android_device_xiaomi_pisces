@@ -1,4 +1,12 @@
 #!/system/bin/sh
+# pisces: capture the log of this boot (init writes to /dev/kmsg too) and the
+# previous boot's ram console as early as /cache is available.
+if [ -d /cache ]; then
+    dmesg > /cache/dmesg-$(date +%s).log 2>/dev/null
+    if [ -e /proc/last_kmsg ]; then
+        cat /proc/last_kmsg > /cache/last_kmsg-$(date +%s).txt 2>/dev/null
+    fi
+fi
 export PATH=/system/bin:/system/xbin:$PATH
 BLOCK_DEVICE=$1
 MOUNT_POINT=$2
