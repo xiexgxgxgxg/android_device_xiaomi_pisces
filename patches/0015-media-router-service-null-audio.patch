@@ -1,0 +1,15 @@
+diff --git a/services/core/java/com/android/server/media/MediaRouterService.java b/services/core/java/com/android/server/media/MediaRouterService.java
+index a7df0e23f63..1a62587d632 100644
+--- a/services/core/java/com/android/server/media/MediaRouterService.java
++++ b/services/core/java/com/android/server/media/MediaRouterService.java
+@@ -169,6 +169,10 @@ public final class MediaRouterService extends IMediaRouterService.Stub
+         mAudioPlayerStateMonitor.registerSelfIntoAudioServiceIfNeeded(mAudioService);
+ 
+         AudioRoutesInfo audioRoutes = null;
++        // pisces: AudioService may be disabled during bring-up.
++        if (mAudioService == null) {
++            return;
++        }
+         try {
+             audioRoutes = mAudioService.startWatchingRoutes(new IAudioRoutesObserver.Stub() {
+                 @Override
