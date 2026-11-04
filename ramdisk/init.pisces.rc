@@ -13,6 +13,9 @@ import init.modem_${ro.boot.modem}.rc
 import init.quickboot.rc
 
 on early-init
+    # pisces: several HALs are still missing and their 5s service waits add up
+    # to >60s during system_server start; scale the framework timeouts.
+    setprop ro.hw_timeout_multiplier 10
     # the binderized mapper service breaks Gralloc2 (must be passthrough)
     stop vendor.gralloc-2-0
     # pisces: 3.4 kernel uses the legacy android_usb gadget; adbd needs
@@ -116,8 +119,10 @@ on post-fs-data
     rm /dev/sysmatdrv
 
 on early-boot
-    exec /system/bin/sh /system/bin/load_audience_fw.sh --log
-    exec /system/bin/sh /system/bin/atmel_fw_update.sh
+    # pisces: run these in the background; the audience firmware loader can
+    # block forever on the ES325 UART, which hangs init and resets the device.
+    start audience_fw
+    start atmel_fw
 
 on boot
 #Add from init.rc
@@ -750,3 +755,17 @@ service userdirs /system/bin/sh /system/etc/userdirs.sh
 on post-fs-data
     exec /system/bin/sh -c "cat /proc/last_kmsg > /cache/last_kmsg.txt 2>/dev/null"
     start userdirs
+
+service audience_fw /system/bin/sh /system/bin/load_audience_fw.sh --log
+    class core
+    user root
+    group root system
+    oneshot
+    disabled
+
+service atmel_fw /system/bin/sh /system/bin/atmel_fw_update.sh
+    class core
+    user root
+    group root system
+    oneshot
+    disabled

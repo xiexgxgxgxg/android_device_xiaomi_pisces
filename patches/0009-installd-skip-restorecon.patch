@@ -1,5 +1,5 @@
 diff --git a/cmds/installd/InstalldNativeService.cpp b/cmds/installd/InstalldNativeService.cpp
-index 860a68b27..6292fff48 100644
+index 860a68b27..0b9e8d446 100644
 --- a/cmds/installd/InstalldNativeService.cpp
 +++ b/cmds/installd/InstalldNativeService.cpp
 @@ -295,47 +295,13 @@ status_t InstalldNativeService::dump(int fd, const Vector<String16> & /* args */
@@ -57,3 +57,18 @@ index 860a68b27..6292fff48 100644
  }
  
  static int restorecon_app_data_lazy(const std::string& parent, const char* name,
+@@ -974,6 +940,14 @@ binder::Status InstalldNativeService::destroyUserData(const std::unique_ptr<std:
+     CHECK_ARGUMENT_UUID(uuid);
+     std::lock_guard<std::recursive_mutex> lock(mLock);
+ 
++    // pisces: something keeps requesting a user-0 data wipe during boot, which
++    // deletes /data/data and restarts the whole boot loop. Never destroy the
++    // primary user's data.
++    if (userId == 0) {
++        LOG(WARNING) << "refusing to destroy data of primary user 0";
++        return ok();
++    }
++
+     const char* uuid_ = uuid ? uuid->c_str() : nullptr;
+     binder::Status res = ok();
+     if (flags & FLAG_STORAGE_DE) {

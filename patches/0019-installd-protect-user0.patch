@@ -1,0 +1,74 @@
+diff --git a/cmds/installd/InstalldNativeService.cpp b/cmds/installd/InstalldNativeService.cpp
+index 860a68b27..0b9e8d446 100644
+--- a/cmds/installd/InstalldNativeService.cpp
++++ b/cmds/installd/InstalldNativeService.cpp
+@@ -295,47 +295,13 @@ status_t InstalldNativeService::dump(int fd, const Vector<String16> & /* args */
+  */
+ static int restorecon_app_data_lazy(const std::string& path, const std::string& seInfo, uid_t uid,
+         bool existing) {
+-    int res = 0;
+-    char* before = nullptr;
+-    char* after = nullptr;
+-
+-    // Note that SELINUX_ANDROID_RESTORECON_DATADATA flag is set by
+-    // libselinux. Not needed here.
+-
+-    if (lgetfilecon(path.c_str(), &before) < 0) {
+-        PLOG(ERROR) << "Failed before getfilecon for " << path;
+-        goto fail;
+-    }
+-    if (selinux_android_restorecon_pkgdir(path.c_str(), seInfo.c_str(), uid, 0) < 0) {
+-        PLOG(ERROR) << "Failed top-level restorecon for " << path;
+-        goto fail;
+-    }
+-    if (lgetfilecon(path.c_str(), &after) < 0) {
+-        PLOG(ERROR) << "Failed after getfilecon for " << path;
+-        goto fail;
+-    }
+-
+-    // If the initial top-level restorecon above changed the label, then go
+-    // back and restorecon everything recursively
+-    if (strcmp(before, after)) {
+-        if (existing) {
+-            LOG(DEBUG) << "Detected label change from " << before << " to " << after << " at "
+-                    << path << "; running recursive restorecon";
+-        }
+-        if (selinux_android_restorecon_pkgdir(path.c_str(), seInfo.c_str(), uid,
+-                SELINUX_ANDROID_RESTORECON_RECURSE) < 0) {
+-            PLOG(ERROR) << "Failed recursive restorecon for " << path;
+-            goto fail;
+-        }
+-    }
+-
+-    goto done;
+-fail:
+-    res = -1;
+-done:
+-    free(before);
+-    free(after);
+-    return res;
++    // pisces: the 3.4 kernel cannot load an SELinux policy, so file labels
++    // cannot be applied; make restorecon a no-op instead of failing.
++    (void)path;
++    (void)seInfo;
++    (void)uid;
++    (void)existing;
++    return 0;
+ }
+ 
+ static int restorecon_app_data_lazy(const std::string& parent, const char* name,
+@@ -974,6 +940,14 @@ binder::Status InstalldNativeService::destroyUserData(const std::unique_ptr<std:
+     CHECK_ARGUMENT_UUID(uuid);
+     std::lock_guard<std::recursive_mutex> lock(mLock);
+ 
++    // pisces: something keeps requesting a user-0 data wipe during boot, which
++    // deletes /data/data and restarts the whole boot loop. Never destroy the
++    // primary user's data.
++    if (userId == 0) {
++        LOG(WARNING) << "refusing to destroy data of primary user 0";
++        return ok();
++    }
++
+     const char* uuid_ = uuid ? uuid->c_str() : nullptr;
+     binder::Status res = ok();
+     if (flags & FLAG_STORAGE_DE) {

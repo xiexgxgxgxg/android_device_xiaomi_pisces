@@ -1,0 +1,99 @@
+diff --git a/sdcard/sdcard.cpp b/sdcard/sdcard.cpp
+index dc36596b1..4643faa84 100644
+--- a/sdcard/sdcard.cpp
++++ b/sdcard/sdcard.cpp
+@@ -142,7 +142,7 @@ static bool sdcardfs_setup_bind_remount(const std::string& source_path, const st
+     return true;
+ }
+ 
+-static bool sdcardfs_setup_secondary(const std::string& default_path, const std::string& source_path,
++static bool __attribute__((unused)) sdcardfs_setup_secondary(const std::string& default_path, const std::string& source_path,
+                                      const std::string& dest_path, uid_t fsuid, gid_t fsgid,
+                                      bool multi_user, userid_t userid, gid_t gid, mode_t mask,
+                                      bool derive_gid, bool default_normal, bool use_esdfs) {
+@@ -154,6 +154,26 @@ static bool sdcardfs_setup_secondary(const std::string& default_path, const std:
+     }
+ }
+ 
++static bool g_used_bind = false;
++
++static bool setup_or_bind(const std::string& source_path, const std::string& dest_path,
++                          uid_t uid, gid_t gid, userid_t userid, bool multi_user,
++                          gid_t gid_mask, int mask, bool derive_gid, bool default_normal,
++                          bool use_esdfs) {
++    if (sdcardfs_setup(source_path, dest_path, uid, gid, multi_user, userid, gid_mask, mask,
++                       derive_gid, default_normal, use_esdfs)) {
++        return true;
++    }
++    // pisces: the 3.4 kernel has no sdcardfs; expose the storage directly.
++    LOG(WARNING) << "sdcardfs unavailable for " << dest_path << ", using bind mount";
++    g_used_bind = true;
++    if (mount(source_path.c_str(), dest_path.c_str(), nullptr, MS_BIND, nullptr) != 0) {
++        PLOG(ERROR) << "bind mount failed for " << dest_path;
++        return false;
++    }
++    return true;
++}
++
+ static void run_sdcardfs(const std::string& source_path, const std::string& label, uid_t uid,
+                          gid_t gid, userid_t userid, bool multi_user, bool full_write,
+                          bool derive_gid, bool default_normal, bool use_esdfs) {
+@@ -165,28 +185,27 @@ static void run_sdcardfs(const std::string& source_path, const std::string& labe
+     if (multi_user) {
+         // Multi-user storage is fully isolated per user, so "other"
+         // permissions are completely masked off.
+-        if (!sdcardfs_setup(source_path, dest_path_default, uid, gid, multi_user, userid,
+-                            AID_SDCARD_RW, 0006, derive_gid, default_normal, use_esdfs) ||
+-            !sdcardfs_setup_secondary(dest_path_default, source_path, dest_path_read, uid, gid,
+-                                      multi_user, userid, AID_EVERYBODY, 0027, derive_gid,
+-                                      default_normal, use_esdfs) ||
+-            !sdcardfs_setup_secondary(dest_path_default, source_path, dest_path_write, uid, gid,
+-                                      multi_user, userid, AID_EVERYBODY, full_write ? 0007 : 0027,
+-                                      derive_gid, default_normal, use_esdfs)) {
++        if (!setup_or_bind(source_path, dest_path_default, uid, gid, userid, multi_user,
++                           AID_SDCARD_RW, 0006, derive_gid, default_normal, use_esdfs) ||
++            !setup_or_bind(dest_path_default, dest_path_read, uid, gid, userid, multi_user,
++                           AID_EVERYBODY, 0027, derive_gid, default_normal, use_esdfs) ||
++            !setup_or_bind(dest_path_default, dest_path_write, uid, gid, userid, multi_user,
++                           AID_EVERYBODY, full_write ? 0007 : 0027, derive_gid, default_normal,
++                           use_esdfs)) {
+             LOG(FATAL) << "failed to sdcardfs_setup";
+         }
+     } else {
+         // Physical storage is readable by all users on device, but
+         // the Android directories are masked off to a single user
+         // deep inside attr_from_stat().
+-        if (!sdcardfs_setup(source_path, dest_path_default, uid, gid, multi_user, userid,
+-                            AID_SDCARD_RW, 0006, derive_gid, default_normal, use_esdfs) ||
+-            !sdcardfs_setup_secondary(dest_path_default, source_path, dest_path_read, uid, gid,
+-                                      multi_user, userid, AID_EVERYBODY, full_write ? 0027 : 0022,
+-                                      derive_gid, default_normal, use_esdfs) ||
+-            !sdcardfs_setup_secondary(dest_path_default, source_path, dest_path_write, uid, gid,
+-                                      multi_user, userid, AID_EVERYBODY, full_write ? 0007 : 0022,
+-                                      derive_gid, default_normal, use_esdfs)) {
++        if (!setup_or_bind(source_path, dest_path_default, uid, gid, userid, multi_user,
++                           AID_SDCARD_RW, 0006, derive_gid, default_normal, use_esdfs) ||
++            !setup_or_bind(dest_path_default, dest_path_read, uid, gid, userid, multi_user,
++                           AID_EVERYBODY, full_write ? 0027 : 0022, derive_gid, default_normal,
++                           use_esdfs) ||
++            !setup_or_bind(dest_path_default, dest_path_write, uid, gid, userid, multi_user,
++                           AID_EVERYBODY, full_write ? 0007 : 0022, derive_gid, default_normal,
++                           use_esdfs)) {
+             LOG(FATAL) << "failed to sdcardfs_setup";
+         }
+     }
+@@ -199,6 +218,14 @@ static void run_sdcardfs(const std::string& source_path, const std::string& labe
+         fs_prepare_dir(obb_path.c_str(), 0775, uid, gid);
+     }
+ 
++    if (g_used_bind) {
++        // pisces: we replaced sdcardfs with bind mounts; vold only considers the
++        // emulated volume mounted while this process is alive.
++        while (true) {
++            sleep(3600);
++        }
++    }
++
+     exit(0);
+ }
+ 

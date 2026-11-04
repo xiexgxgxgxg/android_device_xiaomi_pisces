@@ -1,0 +1,70 @@
+diff --git a/Ext4Crypt.cpp b/Ext4Crypt.cpp
+index 6d6adee..5fb0a60 100644
+--- a/Ext4Crypt.cpp
++++ b/Ext4Crypt.cpp
+@@ -781,8 +781,9 @@ static bool prepare_subdirs(const std::string& action, const std::string& volume
+     if (0 != android::vold::ForkExecvp(
+                  std::vector<std::string>{prepare_subdirs_path, action, volume_uuid,
+                                           std::to_string(user_id), std::to_string(flags)})) {
+-        LOG(ERROR) << "vold_prepare_subdirs failed";
+-        return false;
++        // pisces: subdir preparation relies on SELinux labels that this kernel
++        // cannot provide; do not let it block the user unlock.
++        LOG(WARNING) << "vold_prepare_subdirs failed, continuing";
+     }
+     return true;
+ }
+diff --git a/model/EmulatedVolume.cpp b/model/EmulatedVolume.cpp
+index 31c3924..e8bece0 100644
+--- a/model/EmulatedVolume.cpp
++++ b/model/EmulatedVolume.cpp
+@@ -102,13 +102,21 @@ status_t EmulatedVolume::doMount() {
+         return -errno;
+     }
+ 
+-    nsecs_t start = systemTime(SYSTEM_TIME_BOOTTIME);
++    // pisces: this kernel has no CLOCK_BOOTTIME, so systemTime() cannot be
++    // used for the timeout; count iterations instead.
++    int wait_tries = 0;
+     while (before == GetDevice(mFuseWrite)) {
+         LOG(VERBOSE) << "Waiting for FUSE to spin up...";
+         usleep(50000); // 50ms
+ 
+-        nsecs_t now = systemTime(SYSTEM_TIME_BOOTTIME);
+-        if (nanoseconds_to_milliseconds(now - start) > 5000) {
++        if (++wait_tries > 100) {
++            // pisces: the 3.4 kernel has no sdcardfs and our sdcard daemon
++            // falls back to bind mounts, which keep the same device number.
++            // If the daemon is still alive, treat the storage as ready.
++            if (TEMP_FAILURE_RETRY(waitpid(mFusePid, nullptr, WNOHANG)) == 0) {
++                LOG(WARNING) << "Assuming bind-mounted emulated storage is ready";
++                return OK;
++            }
+             LOG(WARNING) << "Timed out while waiting for FUSE to spin up";
+             return -ETIMEDOUT;
+         }
+diff --git a/model/PublicVolume.cpp b/model/PublicVolume.cpp
+index 11fa2c6..fe88606 100644
+--- a/model/PublicVolume.cpp
++++ b/model/PublicVolume.cpp
+@@ -220,13 +220,17 @@ status_t PublicVolume::doMount() {
+         return -errno;
+     }
+ 
+-    nsecs_t start = systemTime(SYSTEM_TIME_BOOTTIME);
++    // pisces: no CLOCK_BOOTTIME on this kernel, count iterations instead.
++    int wait_tries = 0;
+     while (before == GetDevice(mFuseWrite)) {
+         LOG(VERBOSE) << "Waiting for FUSE to spin up...";
+         usleep(50000); // 50ms
+ 
+-        nsecs_t now = systemTime(SYSTEM_TIME_BOOTTIME);
+-        if (nanoseconds_to_milliseconds(now - start) > 5000) {
++        if (++wait_tries > 100) {
++            if (TEMP_FAILURE_RETRY(waitpid(mFusePid, nullptr, WNOHANG)) == 0) {
++                LOG(WARNING) << "Assuming bind-mounted storage is ready";
++                return OK;
++            }
+             LOG(WARNING) << "Timed out while waiting for FUSE to spin up";
+             return -ETIMEDOUT;
+         }

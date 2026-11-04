@@ -1,0 +1,19 @@
+diff --git a/media/java/android/media/AudioManager.java b/media/java/android/media/AudioManager.java
+index d138c942d54..2a2296b3983 100644
+--- a/media/java/android/media/AudioManager.java
++++ b/media/java/android/media/AudioManager.java
+@@ -4166,8 +4166,13 @@ public class AudioManager {
+      * @hide
+      */
+     public int getRingerModeInternal() {
++        IAudioService service = getService();
++        // pisces: AudioService can be absent while audio bring-up is ongoing.
++        if (service == null) {
++            return RINGER_MODE_NORMAL;
++        }
+         try {
+-            return getService().getRingerModeInternal();
++            return service.getRingerModeInternal();
+         } catch (RemoteException e) {
+             throw e.rethrowFromSystemServer();
+         }
