@@ -351,6 +351,13 @@ on boot
     write /sys/devices/system/cpu/cpufreq/interactive/hispeed_freq 1810500
     write /sys/devices/system/cpu/cpufreq/interactive/go_hispeed_load 65
 
+# pisces: the cpuquiet "runnable" governor cannot see GPU/sync bound load, so
+# it parks the system on CPU0 and never brings the other cores back - one
+# 1.02 GHz A15 cannot drive a 1080p client-composited UI.  pisces_cpu.sh takes
+# hotplug over and keeps all four cores online at a battery-safe frequency
+# (it polls until cpuquiet is enabled, so it is safe to start this early).
+    start pisces_cpu
+
 # Default Read Ahead value for sdcards
     write /sys/block/mmcblk0/queue/read_ahead_kb 2048
 
@@ -637,13 +644,21 @@ service immvibed /system/bin/immvibed
     group system
     oneshot
 
+service pisces_cpu /system/bin/sh /pisces_cpu.sh
+    class main
+    user root
+    group root system
+    oneshot
+    disabled
+
 on property:sys.boot_completed=1
-    # pisces: boot current is limited for the aged battery; once the system is
-    # up, allow the normal 1.02 GHz cap again.
-    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 1020000
-    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_max_freq 1020000
-    write /sys/devices/system/cpu/cpu2/cpufreq/scaling_max_freq 1020000
-    write /sys/devices/system/cpu/cpu3/cpufreq/scaling_max_freq 1020000
+    # pisces: four cores are kept online by pisces_cpu.sh; re-assert the
+    # battery-safe frequency cap for the case where a core was re-onlined
+    # later (a new cpufreq policy starts at 1.8 GHz, which resets the phone).
+    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 816000
+    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_max_freq 816000
+    write /sys/devices/system/cpu/cpu2/cpufreq/scaling_max_freq 816000
+    write /sys/devices/system/cpu/cpu3/cpufreq/scaling_max_freq 816000
 
     write /sys/block/mmcblk0/queue/scheduler cfq
     write /sys/devices/system/cpu/cpufreq/interactive/boost 0

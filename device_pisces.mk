@@ -76,6 +76,7 @@ PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/ramdisk/init.nv_dev_board.usb.rc:root/init.nv_dev_board.usb.rc \
     $(LOCAL_PATH)/ramdisk/init.pisces.rc:root/init.pisces.rc \
     $(LOCAL_PATH)/ramdisk/init.quickboot.rc:root/init.quickboot.rc \
+    $(LOCAL_PATH)/ramdisk/pisces_cpu.sh:root/pisces_cpu.sh \
     $(LOCAL_PATH)/ramdisk/ueventd.pisces.rc:root/ueventd.pisces.rc
 
 # safe mount_ext4, dualboot/mount helper script
