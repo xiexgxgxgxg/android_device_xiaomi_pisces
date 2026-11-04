@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<exceptions>
+    <!-- The Bluetooth app crashes on startup if PBAP cannot open the contacts
+         provider ("SecurityException: Permission Denial: opening provider
+         ContactsProvider2 from com.android.bluetooth ... requires
+         READ_CONTACTS"), which restarts AdapterService in a loop and keeps
+         the adapter OFF. -->
+    <exception package="com.android.bluetooth">
+        <permission name="android.permission.ACCESS_COARSE_LOCATION" fixed="false" />
+        <permission name="android.permission.READ_CONTACTS" fixed="false" />
+        <permission name="android.permission.WRITE_CONTACTS" fixed="false" />
+        <permission name="android.permission.READ_CALL_LOG" fixed="false" />
+        <permission name="android.permission.WRITE_CALL_LOG" fixed="false" />
+        <permission name="android.permission.READ_EXTERNAL_STORAGE" fixed="false" />
+        <permission name="android.permission.WRITE_EXTERNAL_STORAGE" fixed="false" />
+    </exception>
+</exceptions>

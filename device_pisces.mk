@@ -83,7 +83,8 @@ PRODUCT_COPY_FILES += \
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/bin/mount_ext4.sh:system/bin/mount_ext4.sh \
     $(LOCAL_PATH)/bin/fild:system/bin/fild \
-    $(LOCAL_PATH)/bin/fdl:system/bin/fdl
+    $(LOCAL_PATH)/bin/fdl:system/bin/fdl \
+    $(LOCAL_PATH)/default-permissions/pisces-bluetooth.xml:system/etc/default-permissions/pisces-bluetooth.xml
 
 PRODUCT_PACKAGES += \
     dumpe2fs
