@@ -1,5 +1,5 @@
 diff --git a/soundtrigger/SoundTrigger.cpp b/soundtrigger/SoundTrigger.cpp
-index 289b7b199..de8d5fc29 100644
+index 289b7b199..26e6e63d4 100644
 --- a/soundtrigger/SoundTrigger.cpp
 +++ b/soundtrigger/SoundTrigger.cpp
 @@ -61,14 +61,20 @@ const sp<ISoundTriggerHwService> SoundTrigger::getSoundTriggerHwService()
@@ -9,7 +9,7 @@ index 289b7b199..de8d5fc29 100644
 -        do {
 +        // pisces: do not block boot forever when the sound trigger HAL is
 +        // missing (audioserver is not able to publish it yet).
-+        for (int i = 0; i < 20; i++) {
++        for (int i = 0; i < 1; i++) {
              binder = sm->getService(String16(kSoundTriggerHwServiceName));
              if (binder != 0) {
                  break;

@@ -37,16 +37,9 @@ on init
     # mkdir /storage/sdcard1 0700 root root
 
     export EXTERNAL_STORAGE /storage/emulated/legacy
-    export EMULATED_STORAGE_SOURCE /mnt/shell/emulated
     # pisces: no vold yet; zygote aborts if it tries to mount tmpfs there
     # export EMULATED_STORAGE_TARGET /storage/emulated
     export SECONDARY_STORAGE /storage/usbdisk
-
-    # Support legacy paths
-    symlink /storage/emulated/legacy /sdcard
-    symlink /storage/emulated/legacy /mnt/sdcard
-    symlink /storage/emulated/legacy /storage/sdcard0
-    symlink /mnt/shell/emulated/0 /storage/emulated/legacy
 
     # create directory for mounting usb drives
     mkdir /mnt/media_rw/usbdisk 0700 media_rw media_rw
@@ -78,9 +71,6 @@ on fs
 
     exec /system/bin/sh /system/bin/upgrade_layout.sh
 
-    # sdcard service is sometimes too slow and can't create nodes properly
-    start sdcard
-
     mkdir /mnt/modem/data 0770 root radio
     mkdir /mnt/modem/data/factory 0770 root radio
     exec /system/bin/conn_init -o
@@ -89,16 +79,7 @@ on fs
     chmod 0400 /persist/serialno
 
 on post-fs-data
-    # pisces: vold does not run yet, so DE/CE app data dirs are missing.
-    # Create the ones used by system providers during boot.
-    mkdir /data/user_de 0771 system system
-    mkdir /data/user_de/0 0771 system system
-    mkdir /data/user_de/0/org.lineageos.lineagesettings 0700 system system
-    mkdir /data/user_de/0/org.lineageos.lineagesettings/databases 0700 system system
-    mkdir /data/user_de/0/com.android.providers.settings 0700 system system
-    mkdir /data/user_de/0/com.android.providers.settings/databases 0700 system system
-    mkdir /data/user 0771 system system
-    mkdir /data/user/0 0771 system system
+    # pisces: vold does not run yet; userdirs.sh creates the DE/CE dirs.
     mkdir /data/misc/wifi 0770 wifi wifi
     mkdir /data/misc/wifi/sockets 0770 wifi wifi
     mkdir /data/misc/wifi/firmware 0770 wifi wifi
@@ -478,13 +459,8 @@ service iprenew_eth0 /system/bin/dhcpcd -n
     disabled
     oneshot
 
-service sdcard /system/bin/sdcard -u 1023 -g 1023 -l /data/media /mnt/shell/emulated
-    class late_start
-
-service fuse_usbdisk /system/bin/sdcard -u 1023 -g 1023 -w 1023 -d /mnt/media_rw/usbdisk /storage/usbdisk
-    class late_start
-    disabled
-
+# pisces: sdcard is started by vold (A9 FUSE mode); the legacy services below
+# conflicted with it and failed with "failed to sdcardfs_setup".
 # btmacwriter - to create unique BD address
 service btmacwriter /system/bin/btmacwriter
     class main
@@ -763,3 +739,14 @@ service usbfix /system/bin/sh /system/etc/usbfix.sh
 
 on post-fs-data
     start usbfix
+
+service userdirs /system/bin/sh /system/etc/userdirs.sh
+    class core
+    user root
+    group root system
+    oneshot
+    disabled
+
+on post-fs-data
+    exec /system/bin/sh -c "cat /proc/last_kmsg > /cache/last_kmsg.txt 2>/dev/null"
+    start userdirs
