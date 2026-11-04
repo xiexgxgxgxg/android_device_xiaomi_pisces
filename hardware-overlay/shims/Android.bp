@@ -1,0 +1,35 @@
+// Legacy compatibility shims for pre-Android-7 Tegra blobs.
+cc_library_shared {
+    name: "libshim_atomic",
+    srcs: [
+        "shim_atomic.c",
+        "shim_graphicbuffer.cpp",
+    ],
+    shared_libs: [
+        "libcutils",
+        "libui",
+    ],
+    cflags: [
+        "-fno-builtin",
+        // Soong hides symbols by default; the blobs dlopen later and need
+        // these in the dynamic symbol table.
+        "-fvisibility=default",
+    ],
+    cppflags: ["-std=c++14"],
+}
+
+// The 2013 tegra camera HAL needs the Android 4.x SensorManager entry points;
+// camera.pisces dlopen()s this with RTLD_GLOBAL before the vendor module.
+cc_library_shared {
+    name: "libpisces_camshim",
+    srcs: [
+        "camshim.c",
+    ],
+    cflags: [
+        "-fvisibility=default",
+        "-fno-builtin",
+    ],
+    shared_libs: [
+        "libdl",
+    ],
+}

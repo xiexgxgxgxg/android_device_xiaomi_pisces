@@ -1,0 +1,24 @@
+--- a/hardware/nvidia/pisces/camera/Android.mk
++++ b/hardware/nvidia/pisces/camera/Android.mk
+@@ -6,7 +6,7 @@
+     CameraWrapper.cpp
+ 
+ LOCAL_SHARED_LIBRARIES := \
+-    libhardware liblog libcamera_client libutils libbinder libgui
++    libhardware liblog libcamera_client libutils libbinder libgui libsensor
+ 
+ LOCAL_C_INCLUDES += \
+     system/media/camera/include
+
+--- a/hardware/nvidia/pisces/camera/CameraWrapper.cpp
++++ b/hardware/nvidia/pisces/camera/CameraWrapper.cpp
+@@ -39,7 +39,7 @@
+ 
+ #include <binder/IBinder.h>
+ #include <binder/IServiceManager.h>
+-#include <gui/ISensorServer.h>
++#include <sensor/ISensorServer.h>
+ 
+ static android::Mutex gCameraWrapperLock;
+ 
+

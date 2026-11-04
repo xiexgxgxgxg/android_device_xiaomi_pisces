@@ -1,0 +1,150 @@
+--- a/libs/ui/Gralloc2.cpp
++++ b/libs/ui/Gralloc2.cpp
+@@ -24,6 +24,7 @@
+ #include <hardware/hardware.h>
+ 
+ #include <mutex>
++#include <map>
+ 
+ #include <inttypes.h>
+ #include <log/log.h>
+@@ -40,6 +41,42 @@
+ 
+ static constexpr Error kTransactionError = Error::NO_RESOURCES;
+ 
++// pisces: buffers allocated by allocateLocally() are handed to the mapper,
++// which clones the native handle and keeps the clone.  The nvmap memory still
++// belongs to the original handle returned by gralloc, and nothing ever frees
++// it: every buffer libui releases leaked its allocation.  SurfaceFlinger had
++// 790 MB of nvmap resident and eglCreateWindowSurface started failing with
++// EGL_BAD_ALLOC, which crash-looped SystemUI.
++//
++// Remember clone -> original and hand the memory back in Mapper::freeBuffer().
++std::mutex gLocalGrallocMutex;
++alloc_device_t* gLocalGrallocDevice = nullptr;
++std::map<const native_handle_t*, const native_handle_t*> gLocalGrallocOrigins;
++
++// Caller must hold gLocalGrallocMutex.
++alloc_device_t* getLocalGrallocDeviceLocked() {
++    if (gLocalGrallocDevice != nullptr) {
++        return gLocalGrallocDevice;
++    }
++
++    gralloc_module_t const* module = nullptr;
++    if (hw_get_module(GRALLOC_HARDWARE_MODULE_ID,
++            reinterpret_cast<const hw_module_t**>(&module)) != 0) {
++        ALOGE("pisces: local gralloc module not found");
++        return nullptr;
++    }
++
++    alloc_device_t* device = nullptr;
++    if (gralloc_open(reinterpret_cast<const hw_module_t*>(module), &device) != 0 ||
++            device == nullptr) {
++        ALOGE("pisces: local gralloc open failed");
++        return nullptr;
++    }
++
++    gLocalGrallocDevice = device;
++    return device;
++}
++
+ uint64_t getValid10UsageBits() {
+     static const uint64_t valid10UsageBits = []() -> uint64_t {
+         using hardware::graphics::common::V1_0::BufferUsage;
+@@ -165,11 +202,31 @@
+ void Mapper::freeBuffer(buffer_handle_t bufferHandle) const
+ {
+     auto buffer = const_cast<native_handle_t*>(bufferHandle);
++
++    // pisces: if this handle was allocated locally, it is the mapper's clone
++    // and the real allocation is the original handle we stashed away.
++    const native_handle_t* origin = nullptr;
++    alloc_device_t* device = nullptr;
++    {
++        std::lock_guard<std::mutex> lock(gLocalGrallocMutex);
++        auto it = gLocalGrallocOrigins.find(buffer);
++        if (it != gLocalGrallocOrigins.end()) {
++            origin = it->second;
++            gLocalGrallocOrigins.erase(it);
++            device = gLocalGrallocDevice;
++        }
++    }
++
+     auto ret = mMapper->freeBuffer(buffer);
+ 
+     auto error = (ret.isOk()) ? static_cast<Error>(ret) : kTransactionError;
+     ALOGE_IF(error != Error::NONE, "freeBuffer(%p) failed with %d",
+             buffer, error);
++
++    if (origin != nullptr && device != nullptr) {
++        int res = device->free(device, const_cast<native_handle_t*>(origin));
++        ALOGE_IF(res != 0, "pisces: local gralloc free failed: %d", res);
++    }
+ }
+ 
+ Error Mapper::validateBufferSize(buffer_handle_t bufferHandle,
+@@ -346,24 +403,24 @@
+ 
+ Error Allocator::allocateLocally(const IMapper::BufferDescriptorInfo& info,
+         uint32_t count, uint32_t* outStride, buffer_handle_t* outBufferHandles) const {
+-    static std::mutex mutex;
+-    static alloc_device_t* device = nullptr;
++    // Release everything allocated so far, both the mapper clones and the
++    // gralloc memory behind them.
++    auto rollback = [&](uint32_t done) {
++        for (uint32_t j = 0; j < done; j++) {
++            if (outBufferHandles[j] != nullptr) {
++                mMapper.freeBuffer(outBufferHandles[j]);
++                outBufferHandles[j] = nullptr;
++            }
++        }
++    };
+ 
+-    std::lock_guard<std::mutex> lock(mutex);
++    alloc_device_t* device = nullptr;
++    {
++        std::lock_guard<std::mutex> lock(gLocalGrallocMutex);
++        device = getLocalGrallocDeviceLocked();
++    }
+     if (device == nullptr) {
+-        gralloc_module_t const* module = nullptr;
+-        if (hw_get_module(GRALLOC_HARDWARE_MODULE_ID,
+-                reinterpret_cast<const hw_module_t**>(&module)) != 0) {
+-            ALOGE("pisces: local gralloc module not found");
+-            return Error::NO_RESOURCES;
+-        }
+-        alloc_device_t* dev = nullptr;
+-        if (gralloc_open(reinterpret_cast<const hw_module_t*>(module), &dev) != 0 ||
+-                dev == nullptr) {
+-            ALOGE("pisces: local gralloc open failed");
+-            return Error::NO_RESOURCES;
+-        }
+-        device = dev;
++        return Error::NO_RESOURCES;
+     }
+ 
+     uint32_t stride = 0;
+@@ -376,6 +433,7 @@
+                 &handle, &s);
+         if (res != 0 || handle == nullptr) {
+             ALOGE("pisces: local gralloc alloc failed: %d", res);
++            rollback(i);
+             return Error::NO_RESOURCES;
+         }
+         stride = static_cast<uint32_t>(s);
+@@ -384,8 +442,15 @@
+             ALOGE("pisces: local import failed: %d", error);
+             device->free(device, handle);
+             outBufferHandles[i] = nullptr;
++            rollback(i);
+             return error;
+         }
++        // pisces: importBuffer clones the handle; remember the original so the
++        // memory can be released when the clone is freed.
++        {
++            std::lock_guard<std::mutex> lock(gLocalGrallocMutex);
++            gLocalGrallocOrigins[outBufferHandles[i]] = handle;
++        }
+     }
+     *outStride = stride;
+     return Error::NONE;

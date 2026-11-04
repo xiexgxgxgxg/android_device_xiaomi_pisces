@@ -248,9 +248,53 @@ PRODUCT_PACKAGES += \
     android.hardware.audio.effect@2.0-impl \
     android.hardware.audio@2.0-service
 
-# pisces: Bluetooth and NFC have no firmware/config on this device yet and
-# crash-loop during first boot, which soft-restarts the framework. Keep them
-# out of the image until those are functional.
-PRODUCT_PACKAGES := $(filter-out Bluetooth NfcNci,$(PRODUCT_PACKAGES))
+# pisces: WiFi, Bluetooth and camera for Android 9.
+#
+# WiFi: the BCM43341 dhd driver is built into the kernel (CONFIG_BCMDHD=y,
+# wlan0/p2p0 already exist); what was missing is the A9 HIDL stack.  The
+# supplicant is the HIDL-enabled one from external/wpa_supplicant_8 and is
+# started by the "wpa_supplicant" service in init.pisces.rc.
+PRODUCT_PACKAGES += \
+    android.hardware.wifi@1.0-service \
+    libwifi-hal \
+    wpa_supplicant
+
+# Bluetooth: BCM43341 combo, vendor HAL from hardware/broadcom/libbt.  The
+# Bluetooth app itself is not pulled in by full_base.mk (only by
+# generic_no_telephony.mk), so ask for it explicitly.
+PRODUCT_PACKAGES += \
+    Bluetooth \
+    android.hardware.bluetooth@1.0-impl \
+    android.hardware.bluetooth@1.0-service \
+    libbt-vendor
+
+# Camera: the tegra camera HAL is a 2013 hw_module (camera.tegra.so); A9 only
+# reaches it through camera.provider@2.4 + the 1.0 device wrapper.  The
+# CameraWrapper loads "camera.vendor.<variant>", so the blob is also copied
+# under that name (ro.board.platform=tegra).
+#
+# The passthrough impl libraries have to be in the image by name: they are
+# dlopen()ed, not linked by anything that is already installed, and libyuv is
+# a dependency of the external-camera provider.  libpisces_camshim provides the
+# Android 4.x SensorManager entry points the blob needs and drops the process
+# target SDK to 22 so the TEXTREL in libFaceProc.so is accepted.
+PRODUCT_PACKAGES += \
+    camera.pisces \
+    android.hardware.camera.provider@2.4-service \
+    android.hardware.camera.provider@2.4-impl \
+    camera.device@1.0-impl \
+    camera.device@3.2-impl \
+    camera.device@3.3-impl \
+    camera.device@3.4-impl \
+    camera.device@3.4-external-impl \
+    libyuv \
+    libpisces_camshim
+
+PRODUCT_COPY_FILES += \
+    vendor/xiaomi/pisces/proprietary/lib/hw/camera.tegra.so:system/vendor/lib/hw/camera.vendor.tegra.so
+
+# pisces: NFC has no working firmware yet and crash-loops on first boot; keep
+# it out of the image.  Bluetooth is back now that libbt-vendor builds.
+PRODUCT_PACKAGES := $(filter-out NfcNci,$(PRODUCT_PACKAGES))
 
 PRODUCT_PACKAGES += PiscesStub

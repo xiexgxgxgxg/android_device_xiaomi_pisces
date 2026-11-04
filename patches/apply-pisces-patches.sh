@@ -30,4 +30,9 @@ apply 0018-sdcard-bind-fallback.patch               system/core
 apply 0020-vold-accept-bind-emulated.patch          system/vold
 apply 0021-keystore-state-soft.patch               frameworks/base
 apply 0022-wifi-dataintegrity-keystore.patch        frameworks/opt/net/wifi
+# 0023-0025 were applied by hand (they touch several projects at once);
+# 0026 is the gralloc free path that goes with 0023.
+apply 0026-gralloc-free-local-alloc.patch           frameworks/native
+# 0027 targets hardware/nvidia, which is not a git project in this tree.
+patch -p1 -d "$ROOT" -i "$P/0027-camera-wrapper-a9-headers.patch"
 echo "all patches applied"
