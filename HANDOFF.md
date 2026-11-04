@@ -220,6 +220,41 @@ State: `dumpsys wifi` = enabled, supplicant has the STA interface
   `hardware/broadcom/libbt/include/bt_vendor_brcm.h`) and compare with
   `/vendor/bin/nv_hciattach`, the NVIDIA tool the stock ROM used.
 
+## Modem / RIL (baseband version now shows)
+
+`gsm.version.baseband` was empty because nothing ever started the modem.  Four
+things were wrong:
+
+1. `fild` and `fdl` (the Spreadtrum modem loader and its image transfer tool)
+   were in `bin/` but were never copied into the image; both are in
+   `PRODUCT_COPY_FILES` now and `init.modem_sprd.rc` starts `fild` from
+   `on boot`.  fild flashes the modem over SPI, sets the GSM0710 line
+   discipline ("Line discipline switched to 26"), then starts rild itself.
+2. `init.modem_sprd.rc` used the 4.x-only `service_redefine` keyword and the
+   `class_start:main` trigger; A9 init rejected the whole block.  Rewritten.
+3. rild needs the pre-M libcutils `socket_loopback_client()` for the vendor
+   `libril-xiaomi-sprd.so`; `libpisces_rilshim` is LD_PRELOADed into the
+   service (same trick as the camera).
+4. A9's rild appends `-c <clientId>` to the vendor RIL arguments and the 2012
+   Spreadtrum RIL aborts on it (`invalid option -- c`, then
+   "xiaomi-ril requires: -p <tcp port> or -d /dev/tty_device", RIL_Init returns
+   NULL).  `hardware/ril/rild/rild.c` only passes `-c` for non-zero slots now,
+   and `rild.libargs` is `-d /dev/ts0710mux0` (the `-r ts0710mux*` form the old
+   file had is not understood by this RIL).
+
+Result: rild registers `android.hardware.radio@1.0/1.1::IRadio/slot1` and
+`IOemHook/slot1`, and `gsm.version.baseband` reads
+`DM_BASE_13A_8803G_W13.44 | 20140120092332`.
+
+Still broken: SIM/telephony.  The vendor RIL speaks the 2012 RIL API
+(`RIL_register: RIL version 6`) and A9's libril parses the responses with the
+current structures, so `GET_SIM_STATUS` comes back as
+`error 66 INVALID_RESPONSE` (`CARDSTATE_ABSENT`), `currentSignalStrengthInd:
+invalid response`, and `RADIO_POWER` returns GENERIC_FAILURE.  The modem itself
+is alive (+ECSQ unsolicited every 5 s).  Making calls/data work would mean
+adapting the vendor RIL to the RIL v9+ structures (CardStatus, CellInfo,
+SignalStrength, ...) - a real porting job, not a one-liner.
+
 ## Next steps
 
 1. WiFi: instrument `libwifi-hal-bcm`'s `wifi_initialize()` /
