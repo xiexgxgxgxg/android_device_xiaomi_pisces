@@ -182,7 +182,7 @@ index 918251f9d..c3057e941 100644
  }
  
 diff --git a/libs/ui/GraphicBufferAllocator.cpp b/libs/ui/GraphicBufferAllocator.cpp
-index eaba1ed1a..ee4ccf92f 100644
+index eaba1ed1a..f04784fa6 100644
 --- a/libs/ui/GraphicBufferAllocator.cpp
 +++ b/libs/ui/GraphicBufferAllocator.cpp
 @@ -98,6 +98,8 @@ status_t GraphicBufferAllocator::allocate(uint32_t width, uint32_t height,
@@ -194,6 +194,18 @@ index eaba1ed1a..ee4ccf92f 100644
  
      // make sure to not allocate a N x 0 or 0 x N buffer, since this is
      // allowed from an API stand-point allocate a 1x1 buffer instead.
+@@ -115,6 +117,11 @@ status_t GraphicBufferAllocator::allocate(uint32_t width, uint32_t height,
+     info.format = static_cast<Gralloc2::PixelFormat>(format);
+     info.usage = usage;
+ 
++    // pisces: EGL window surfaces need texture-capable buffers; the legacy
++    // gralloc also re-imports this variant more reliably.
++    if ((info.usage & 0x900) == 0x900) {
++        info.usage |= 0x200;  // HW_TEXTURE
++    }
+     Gralloc2::Error error = mAllocator->allocate(info, stride, handle);
+     if (error == Gralloc2::Error::NONE) {
+         Mutex::Autolock _l(sLock);
 diff --git a/libs/ui/include/ui/Gralloc2.h b/libs/ui/include/ui/Gralloc2.h
 index 5a8dbda5d..0c855b01b 100644
 --- a/libs/ui/include/ui/Gralloc2.h
