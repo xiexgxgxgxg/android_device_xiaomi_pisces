@@ -238,6 +238,16 @@ PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/userdirs.sh:system/etc/userdirs.sh
 
 PRODUCT_COPY_FILES += \
-    $(LOCAL_PATH)/audio/audio_policy_configuration.xml:system/vendor/etc/audio_policy_configuration.xml \
-    $(LOCAL_PATH)/audio/audio_policy_volumes.xml:system/vendor/etc/audio_policy_volumes.xml \
-    $(LOCAL_PATH)/audio/default_volume_tables.xml:system/vendor/etc/default_volume_tables.xml
+    $(LOCAL_PATH)/audio/audio_policy_configuration.xml:system/vendor/etc/audio/audio_policy_configuration.xml \
+    $(LOCAL_PATH)/audio/audio_policy_volumes.xml:system/vendor/etc/audio/audio_policy_volumes.xml \
+    $(LOCAL_PATH)/audio/default_volume_tables.xml:system/vendor/etc/audio/default_volume_tables.xml
+
+PRODUCT_PACKAGES += \
+    android.hardware.audio@2.0-impl \
+    android.hardware.audio.effect@2.0-impl \
+    android.hardware.audio@2.0-service
+
+# pisces: Bluetooth and NFC have no firmware/config on this device yet and
+# crash-loop during first boot, which soft-restarts the framework. Keep them
+# out of the image until those are functional.
+PRODUCT_PACKAGES := $(filter-out Bluetooth NfcNci,$(PRODUCT_PACKAGES))
