@@ -1,3 +1,91 @@
+diff --git a/cmds/installd/InstalldNativeService.cpp b/cmds/installd/InstalldNativeService.cpp
+index 860a68b27..0b9e8d446 100644
+--- a/cmds/installd/InstalldNativeService.cpp
++++ b/cmds/installd/InstalldNativeService.cpp
+@@ -295,47 +295,13 @@ status_t InstalldNativeService::dump(int fd, const Vector<String16> & /* args */
+  */
+ static int restorecon_app_data_lazy(const std::string& path, const std::string& seInfo, uid_t uid,
+         bool existing) {
+-    int res = 0;
+-    char* before = nullptr;
+-    char* after = nullptr;
+-
+-    // Note that SELINUX_ANDROID_RESTORECON_DATADATA flag is set by
+-    // libselinux. Not needed here.
+-
+-    if (lgetfilecon(path.c_str(), &before) < 0) {
+-        PLOG(ERROR) << "Failed before getfilecon for " << path;
+-        goto fail;
+-    }
+-    if (selinux_android_restorecon_pkgdir(path.c_str(), seInfo.c_str(), uid, 0) < 0) {
+-        PLOG(ERROR) << "Failed top-level restorecon for " << path;
+-        goto fail;
+-    }
+-    if (lgetfilecon(path.c_str(), &after) < 0) {
+-        PLOG(ERROR) << "Failed after getfilecon for " << path;
+-        goto fail;
+-    }
+-
+-    // If the initial top-level restorecon above changed the label, then go
+-    // back and restorecon everything recursively
+-    if (strcmp(before, after)) {
+-        if (existing) {
+-            LOG(DEBUG) << "Detected label change from " << before << " to " << after << " at "
+-                    << path << "; running recursive restorecon";
+-        }
+-        if (selinux_android_restorecon_pkgdir(path.c_str(), seInfo.c_str(), uid,
+-                SELINUX_ANDROID_RESTORECON_RECURSE) < 0) {
+-            PLOG(ERROR) << "Failed recursive restorecon for " << path;
+-            goto fail;
+-        }
+-    }
+-
+-    goto done;
+-fail:
+-    res = -1;
+-done:
+-    free(before);
+-    free(after);
+-    return res;
++    // pisces: the 3.4 kernel cannot load an SELinux policy, so file labels
++    // cannot be applied; make restorecon a no-op instead of failing.
++    (void)path;
++    (void)seInfo;
++    (void)uid;
++    (void)existing;
++    return 0;
+ }
+ 
+ static int restorecon_app_data_lazy(const std::string& parent, const char* name,
+@@ -974,6 +940,14 @@ binder::Status InstalldNativeService::destroyUserData(const std::unique_ptr<std:
+     CHECK_ARGUMENT_UUID(uuid);
+     std::lock_guard<std::recursive_mutex> lock(mLock);
+ 
++    // pisces: something keeps requesting a user-0 data wipe during boot, which
++    // deletes /data/data and restarts the whole boot loop. Never destroy the
++    // primary user's data.
++    if (userId == 0) {
++        LOG(WARNING) << "refusing to destroy data of primary user 0";
++        return ok();
++    }
++
+     const char* uuid_ = uuid ? uuid->c_str() : nullptr;
+     binder::Status res = ok();
+     if (flags & FLAG_STORAGE_DE) {
+diff --git a/cmds/servicemanager/service_manager.c b/cmds/servicemanager/service_manager.c
+index 6b340a8d3..3a11cc1fd 100644
+--- a/cmds/servicemanager/service_manager.c
++++ b/cmds/servicemanager/service_manager.c
+@@ -63,6 +63,9 @@ static struct selabel_handle* sehandle;
+ 
+ static bool check_mac_perms(pid_t spid, uid_t uid, const char *tctx, const char *perm, const char *name)
+ {
++    /* pisces: no SELinux policy can be loaded on the 3.4 kernel. */
++    return true;
++
+     char *sctx = NULL;
+     const char *class = "service_manager";
+     bool allowed;
 diff --git a/libs/ui/Gralloc2.cpp b/libs/ui/Gralloc2.cpp
 index 918251f9d..c3057e941 100644
 --- a/libs/ui/Gralloc2.cpp
@@ -94,7 +182,7 @@ index 918251f9d..c3057e941 100644
  }
  
 diff --git a/libs/ui/GraphicBufferAllocator.cpp b/libs/ui/GraphicBufferAllocator.cpp
-index eaba1ed1a..705b642e6 100644
+index eaba1ed1a..ee4ccf92f 100644
 --- a/libs/ui/GraphicBufferAllocator.cpp
 +++ b/libs/ui/GraphicBufferAllocator.cpp
 @@ -98,6 +98,8 @@ status_t GraphicBufferAllocator::allocate(uint32_t width, uint32_t height,
@@ -106,19 +194,6 @@ index eaba1ed1a..705b642e6 100644
  
      // make sure to not allocate a N x 0 or 0 x N buffer, since this is
      // allowed from an API stand-point allocate a 1x1 buffer instead.
-@@ -115,6 +117,12 @@ status_t GraphicBufferAllocator::allocate(uint32_t width, uint32_t height,
-     info.format = static_cast<Gralloc2::PixelFormat>(format);
-     info.usage = usage;
- 
-+    // pisces: the legacy Tegra gralloc fails to re-import buffers that only
-+    // request HW_COMPOSER|HW_RENDER; asking for HW_TEXTURE as well selects a
-+    // path whose buffers import into other processes correctly.
-+    if ((info.usage & 0x900) == 0x900) {
-+        info.usage |= 0x1200;  // HW_TEXTURE | HW_FB
-+    }
-     Gralloc2::Error error = mAllocator->allocate(info, stride, handle);
-     if (error == Gralloc2::Error::NONE) {
-         Mutex::Autolock _l(sLock);
 diff --git a/libs/ui/include/ui/Gralloc2.h b/libs/ui/include/ui/Gralloc2.h
 index 5a8dbda5d..0c855b01b 100644
 --- a/libs/ui/include/ui/Gralloc2.h
@@ -148,3 +223,16 @@ index 5a8dbda5d..0c855b01b 100644
  private:
      const Mapper& mMapper;
      sp<IAllocator> mAllocator;
+diff --git a/opengl/libs/EGL/Loader.cpp b/opengl/libs/EGL/Loader.cpp
+index 7f769114e..322923516 100644
+--- a/opengl/libs/EGL/Loader.cpp
++++ b/opengl/libs/EGL/Loader.cpp
+@@ -296,7 +296,7 @@ void Loader::init_api(void* dso,
+             }
+         }
+         if (f == NULL) {
+-            //ALOGD("%s", name);
++            ALOGE("pisces: missing GL/EGL entry point: %s", name);
+             f = (__eglMustCastToProperFunctionPointerType)gl_unimplemented;
+ 
+             /*

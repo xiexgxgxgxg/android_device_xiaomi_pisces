@@ -1,0 +1,43 @@
+diff --git a/pisces/shims/Android.bp b/pisces/shims/Android.bp
+index 8501d52..e7d89c1 100644
+--- a/pisces/shims/Android.bp
++++ b/pisces/shims/Android.bp
+@@ -6,6 +6,7 @@ cc_library_shared {
+         "shim_graphicbuffer.cpp",
+     ],
+     shared_libs: [
++        "libcutils",
+         "libui",
+     ],
+     cflags: [
+diff --git a/pisces/shims/shim_graphicbuffer.cpp b/pisces/shims/shim_graphicbuffer.cpp
+index 6008bdc..c311018 100644
+--- a/pisces/shims/shim_graphicbuffer.cpp
++++ b/pisces/shims/shim_graphicbuffer.cpp
+@@ -5,6 +5,7 @@
+  * and forward to the current constructor.
+  */
+ #include <stdint.h>
++#include <cutils/native_handle.h>
+ #include <ui/GraphicBuffer.h>
+ 
+ extern "C" void shim_GraphicBuffer_ctor(void* self, uint32_t width,
+@@ -18,7 +19,17 @@ extern "C" void shim_GraphicBuffer_ctor(void* self, uint32_t width,
+ 					uint32_t usage, uint32_t stride,
+ 					native_handle_t* handle, bool keep)
+ {
++	// The legacy blob and libui must not free the same native handle, or
++	// the GraphicBuffer destructor runs on an already-freed handle. Give
++	// GraphicBuffer its own copy when the caller passes one in.
++	native_handle_t* owned = handle;
++	if (handle != nullptr) {
++		native_handle_t* clone = native_handle_clone(handle);
++		if (clone != nullptr) {
++			owned = clone;
++		}
++	}
+ 	new (self) android::GraphicBuffer(
+ 		width, height, static_cast<android::PixelFormat>(format),
+-		1 /* layerCount */, usage, stride, handle, keep);
++		1 /* layerCount */, usage, stride, owned, keep);
+ }

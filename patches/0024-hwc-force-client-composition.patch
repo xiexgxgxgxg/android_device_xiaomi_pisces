@@ -1,0 +1,56 @@
+diff --git a/graphics/composer/2.1/utils/hwc2on1adapter/HWC2On1Adapter.cpp b/graphics/composer/2.1/utils/hwc2on1adapter/HWC2On1Adapter.cpp
+index 6551a99a..a97b9de0 100644
+--- a/graphics/composer/2.1/utils/hwc2on1adapter/HWC2On1Adapter.cpp
++++ b/graphics/composer/2.1/utils/hwc2on1adapter/HWC2On1Adapter.cpp
+@@ -1832,8 +1832,11 @@ void HWC2On1Adapter::Display::updateTypeChanges(const hwc_layer_1_t& hwc1Layer,
+             }
+             break;
+         case HWC_OVERLAY:
+-            if (layer.getCompositionType() != Composition::Device) {
+-                mChanges->addTypeChange(layerId, Composition::Device);
++            // pisces: the legacy HWC1 blob segfaults in presentDisplay when
++            // asked to handle device (overlay) layers. Force GPU composition
++            // for every overlay and let HWC only present the client target.
++            if (layer.getCompositionType() != Composition::Client) {
++                mChanges->addTypeChange(layerId, Composition::Client);
+             }
+             break;
+         case HWC_BACKGROUND:
+diff --git a/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h b/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
+index 7369ac75..14644c7c 100644
+--- a/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
++++ b/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
+@@ -75,12 +75,32 @@ class Gralloc0HalImpl : public Hal {
+ 
+     Error importBuffer(const native_handle_t* rawHandle,
+                        native_handle_t** outBufferHandle) override {
++        ALOGE("pisces: importBuffer raw=%p numFds=%d numInts=%d", rawHandle,
++              rawHandle ? rawHandle->numFds : -1, rawHandle ? rawHandle->numInts : -1);
+         native_handle_t* bufferHandle = native_handle_clone(rawHandle);
+         if (!bufferHandle) {
+             return Error::NO_RESOURCES;
+         }
+ 
+-        if (mModule->registerBuffer(mModule, bufferHandle)) {
++        if (bufferHandle) {
++            ALOGE("pisces: import ints: %d %d %d %d nfds=%d nints=%d", 
++                  bufferHandle->data[0], bufferHandle->data[1],
++                  bufferHandle->data[2], bufferHandle->data[3],
++                  bufferHandle->numFds, bufferHandle->numInts);
++        }
++        // pisces: the legacy gralloc occasionally fails registerBuffer with
++        // ENOMEM under concurrent allocation; retry a few times before giving
++        // up so a transient failure does not kill the client.
++        int reg = 0;
++        for (int attempt = 0; attempt < 8; attempt++) {
++            reg = mModule->registerBuffer(mModule, bufferHandle);
++            if (reg == 0) {
++                break;
++            }
++            usleep(2000);
++        }
++        if (reg) {
++            ALOGE("pisces: registerBuffer failed after retries: %d", reg);
+             native_handle_close(bufferHandle);
+             native_handle_delete(bufferHandle);
+             return Error::BAD_BUFFER;
