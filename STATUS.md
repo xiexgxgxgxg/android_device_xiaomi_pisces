@@ -18,6 +18,14 @@ Updated: 2026-11-04 18:15
 - Bluetooth/NFC removed from the image (PiscesStub overrides) because both
   crash-loop on first boot until firmware/config exists.
 
+## Boot power workaround (working)
+
+The aged battery cannot carry the stock boot current: `VSYS_MON` fires and the
+PMIC does a power-on reset ~3.4 s into boot. Fixed by capping the CPU during
+boot in init.pisces.rc: four cores online at 510 MHz (was 1.8 GHz), backlight
+dimmed, then on `sys.boot_completed=1` the cap is raised to 1.02 GHz.
+Verified: boot_completed=1, VSYS_MON=0, boot animation completes.
+
 ## Current hardware finding (2026-11-04 18:50)
 
 After the OTA was reflashed, /data formatted and the boot image rewritten from
@@ -57,6 +65,15 @@ buffers allocated with usage 0x900 (HW_COMPOSER|HW_RENDER). Measurements:
 
 Result: SystemUI keeps crashing (`EGL_BAD_ALLOC`), the device ends up with
 load average >14 and a black screen with backlight on.
+
+A local gralloc0 allocation path in libui removed the EGL failures, but then
+the legacy composer blob crashed in `presentDisplay()`
+(`android.hardware.graphics.composer@2.1-impl`), which also soft-restarts the
+framework. Both halves must be solved together:
+
+1. local allocation (to fix the cross-process import), and
+2. forced GPU/client composition (to keep the HWC1 blob out of
+   `presentDisplay`), or a working framebuffer composer fallback.
 
 Next session plan:
 
