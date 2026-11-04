@@ -233,3 +233,11 @@ PRODUCT_PACKAGES += \
 
 PRODUCT_COPY_FILES += \
     vendor/xiaomi/pisces/proprietary/lib/hw/gralloc.tegra.so:system/vendor/lib/hw/gralloc.tegra.so
+
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/userdirs.sh:system/etc/userdirs.sh
+
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/audio/audio_policy_configuration.xml:system/vendor/etc/audio_policy_configuration.xml \
+    $(LOCAL_PATH)/audio/audio_policy_volumes.xml:system/vendor/etc/audio_policy_volumes.xml \
+    $(LOCAL_PATH)/audio/default_volume_tables.xml:system/vendor/etc/default_volume_tables.xml

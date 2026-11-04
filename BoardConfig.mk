@@ -67,7 +67,8 @@ BOARD_KERNEL_IMAGE_NAME := zImage
 # TARGET_POWERHAL_VARIANT removed: no tegra power HAL in Android 9 tree
 
 # Audio
-USE_LEGACY_AUDIO_POLICY := 1
+# pisces: A9 uses the XML audio policy configuration
+USE_XML_AUDIO_POLICY_CONF := 1
 COMMON_GLOBAL_CFLAGS += -DHAVE_MIUI_AUDIO_BLOB -DHAVE_PRE_LOLLIPOP_AUDIO_BLOB
 TARGET_NEED_CUTILS_LIST_SYMBOLS := 1
 # TARGET_LDPRELOAD removed for bring-up (CM12-era shims)
