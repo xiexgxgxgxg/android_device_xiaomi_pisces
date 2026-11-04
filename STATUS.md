@@ -18,7 +18,24 @@ Updated: 2026-11-04 18:15
 - Bluetooth/NFC removed from the image (PiscesStub overrides) because both
   crash-loop on first boot until firmware/config exists.
 
-## Remaining blocker
+## Current hardware finding (2026-11-04 18:50)
+
+After the OTA was reflashed, /data formatted and the boot image rewritten from
+the zip, the device still rebooted after ~2-3 s. `/proc/last_kmsg` (read from
+TWRP) ends with a stream of:
+
+    palmas 4-0058: VSYS_MON interrupt occur
+
+`VSYS_MON` is the PMIC supply-voltage monitor alarm: the system rail sags
+below the safe range under boot load, so the PMIC resets the SoC. This is a
+power/battery problem, not a software one (the 2013 battery has high internal
+resistance; 40% capacity does not mean it can carry boot current).
+
+Next: charge with a good 5V/2A supply, check the battery connector (it was
+reseated), and if VSYS_MON persists while on a strong charger, replace the
+battery.
+
+## Remaining software blocker
 
 Selecting a language and pressing "next" in SetupWizard soft-restarts the
 framework after a while. Symptoms in logs:
