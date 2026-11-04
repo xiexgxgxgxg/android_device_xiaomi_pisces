@@ -1,6 +1,6 @@
 # Pisces (Xiaomi Mi 3 TD) LineageOS 16.0 bring-up — handoff
 
-Date: 2026-11-04 (late session). Device: Xiaomi Mi 3 TD, `pisces`, Tegra 4 T114,
+Date: 2026-11-04/05 (long session). Device: Xiaomi Mi 3 TD, `pisces`, Tegra 4 T114,
 32-bit, 1080x1920, 16 MB recovery, eMMC 458 GB userdata at `/data`.
 
 ## Environment
@@ -12,130 +12,231 @@ Date: 2026-11-04 (late session). Device: Xiaomi Mi 3 TD, `pisces`, Tegra 4 T114,
   standalone copy `/data/twrp/kernel/src` (same files).
 - TWRP tree: `/data/twrp/source-9.0`, device tree
   `/data/twrp/source-9.0/device/xiaomi/pisces`.
-- Device repo clone: `/data/twrp/device-repo-real` (branch `lineage-16.0`).
-- Git: remotes are HTTPS with a PAT baked into the URL (user-provided, keep
-  it out of public pastes). SSH to GitHub is intercepted by the phone proxy
-  (banner `SSH-2.0-5ec5cb2f`), so always use HTTPS.
+- Device repo (canonical): `/data/twrp/device-repo-real` (branch `lineage-16.0`).
+  The build uses `/data/lineage-16.0/device/xiaomi/pisces`, which is a **copy** —
+  after editing the repo, copy the changed files over (device_pisces.mk,
+  lineage_pisces.mk, manifest.xml, ramdisk/*).
+- Build log web view: `python3 /data/twrp/logweb.py` serves
+  `build-logs/latest.log` on http://127.0.0.1:8800/ (2 s refresh).
 
 Build:
 ```bash
 cd /data/lineage-16.0
-export LC_ALL=C JAVA_HOME=/data/twrp/toolchain/jdk8 \
+export LC_ALL=C LANG=C LOCPATH=/data/twrp/locale \
+  JAVA_HOME=/data/twrp/toolchain/jdk8 \
   PATH=/data/twrp/toolchain/bin:/data/twrp/toolchain/python2/bin:/data/twrp/toolchain/jdk8/bin:$PATH \
   LD_LIBRARY_PATH=/data/twrp/toolchain/lib
 source build/envsetup.sh && lunch lineage_pisces-eng
-mka bootimage -j16          # ~1.5 min
-mka libui -j16              # ~10 s
-mka android.hardware.graphics.composer@2.1-impl -j16
+mka bootimage -j16        # ~1.5 min
+mka bacon -j16            # full OTA, ~20 min cold, ~5 min incremental
 ```
 
 ## Flashing / testing
 
-- Never `fastboot flash boot` (ignored/unsafe experiments): Mi 3 bootloader
-  accepts `fastboot boot recovery.img` and that is how TWRP is entered.
-- Flashing boot from TWRP or a rooted system:
+- Never `fastboot flash boot`. `fastboot boot recovery.img` enters TWRP.
+- From a booted system: `adb reboot recovery` lands in TWRP (verified).
+- Flash an OTA from TWRP:
   ```bash
-  adb push out/target/product/pisces/boot.img /sdcard/boot.img
-  adb shell 'dd if=/sdcard/boot.img of=/dev/block/mmcblk0p19 bs=4096; sync'
+  adb push out/target/product/pisces/lineage_pisces-ota-eng.xie.zip /sdcard/lineage.zip
+  adb shell '/sbin/twrp install /sdcard/lineage.zip'    # ~2m15
+  adb reboot
   ```
-  then verify md5 of the first `boot.img` size bytes vs `/dev/block/mmcblk0p19`.
-- Full OTA: `/tmp/flash-auto.sh` (TWRP: push zip, install, reboot; log
-  `/tmp/flash-auto.log`). TWRP adb offline: `adb reconnect offline`.
+- Pushing a single library without a rebuild (root shell):
+  ```bash
+  adb root; adb shell 'mount -o rw,remount /system'
+  adb push <file> /system/lib/... ; adb shell chmod 644 <dest>
+  ```
 - Partitions: LNX=p19 boot, SOS=p21 recovery, APP=p24 system, CAC=p26 cache,
   UDA=p27 data, MSC=p7.
-- `/proc/last_kmsg` **works in TWRP** and holds the previous boot's kernel
-  log — best tool for boot/reset debugging.
+- `/proc/last_kmsg` works in TWRP.
 
 ## Boot power workaround (must stay)
 
 The 2013 battery cannot carry stock boot current: PMIC (`palmas 4-0058`)
 raises `VSYS_MON` (threshold 2950 mV) and does a POR reset ~3.4 s into boot.
 
-Fix in `device/xiaomi/pisces/ramdisk/init.pisces.rc`:
-- `on early-init`: bring cpu1-3 online, governor `interactive`,
-  `scaling_max_freq 510000`; `on boot`: same cap for cpu1-3.
-- `on boot`: backlight brightness 20 for `lm3533-backlight0/1`.
-- `on property:sys.boot_completed=1`: raise all cores to `1020000`.
+Kept in `ramdisk/init.pisces.rc`: 4 cores online at 510 MHz during boot,
+backlight 20; after `sys.boot_completed=1` the cap is lifted.
 
-Verified: `boot_completed=1`, `VSYS_MON=0`, animation finishes. Do **not**
-restore 1.8 GHz boot without re-testing.
+Measured this session with 4 cores at 100% load (battery at 20%):
+`816 MHz -> VBAT 3.386 V`, `1.02 -> 3.373`, `1.122 -> 3.403`,
+`1.224 -> 3.401`, `1.326 -> 3.363`, `1.428 -> 3.376`, `1.53 -> 3.351`
+(temperature 65 C, no reset). Four cores at **1.8 GHz** does reset the phone.
 
-## Graphics stack (this session's core work)
+## The three big fixes of this session
 
-Kernel (`lineage-16.0-113`, commit `e3d9500e`):
-- binder: `BINDER_TYPE_FDA` + SG/PTR support for A9 libhwbinder.
-- nvmap: allow `NVMAP_IOC_FROM_ID` cross-process import (gralloc in SF).
-- `.gitignore` for kernel build artifacts (never `git add -A` in kernel tree).
+### 1. Only one CPU core was online (this is why the UI felt frozen)
 
-System patches (in `device/xiaomi/pisces/patches`, applied by
-`apply-pisces-patches.sh`; mirrors in `/data/twrp/device-repo-real/patches`):
-- 0001..0022: init/bionic/hwservicemanager/servicemanager/zygote/installd/
-  netd/AlarmManager/audio/media/sdcard-bind/vold/keystore/WiFi patches.
-- 0023 `gralloc-local-alloc`: libui allocates with local gralloc0 module and
-  registers in-process; also adds `HW_TEXTURE` (0x200) for
-  HW_COMPOSER|HW_RENDER buffers because EGL window surfaces need it.
-- 0024 `hwc-force-client-composition`: HWC2On1Adapter forces every HWC1
-  overlay layer to CLIENT composition.
-- 0025 `graphicbuffer-handle-clone` + padded `operator new` in
-  `libshim_atomic`: the HWC blob allocates objects with old `sizeof()`
-  (GraphicBuffer ABI); shim over-allocates 512 bytes and clones handles.
+`/sys/devices/system/cpu/online` was `0`. The cpuquiet *runnable* governor
+parks everything on CPU0 because the A9 UI workload is GPU/sync bound, so the
+runnable-thread count it samples stays low and it never brings the other cores
+back. One 1.02 GHz A15 cannot drive a 1080p client-composited UI.
 
-Why: legacy gralloc fails cross-process `registerBuffer` for usage 0x900
-(SystemUI `EGL_BAD_ALLOC`); legacy hwcomposer blob crashes in
-`glc_set -> destroy_graphic_buffer -> ~GraphicBuffer` due to the A9 class
-layout. With the four pieces the system reaches the launcher and SetupWizard
-completes (`user_setup_complete=1`, `device_provisioned=1`).
+`ramdisk/pisces_cpu.sh` (new, in the ramdisk root) switches the cpuquiet
+governor to `userspace`, onlines CPU1-3 and only then caps them (a freshly
+onlined CPU gets a new cpufreq policy with the default 1.8 GHz limit — capping
+before onlining is what makes it possible to reset the phone). Boot keeps
+510 MHz; after `boot_completed` the cap is 816 MHz.
 
-## Current state (end of session)
+### 2. Black screen / SystemUI crash loop — nvmap leak
 
-Working:
-- Boot is reliable (power workaround), SetupWizard completes, launcher and
-  SystemUI start, screen off no longer reliably soft-restarts (verify).
-- emulated storage (sdcard bind fallback), user 0 unlock, audio HAL,
-  keystore, vold, no Bluetooth/NFC (PiscesStub overrides them).
+Symptoms: `EGL_BAD_ALLOC` on `eglCreateWindowSurface`, and
+`pisces: local gralloc alloc failed: -12`.
+`/sys/kernel/debug/nvmap/iovmm/clients` showed **surfaceflinger: 794 MB** of
+862 MB total.
 
-Known remaining:
-- **WiFi**: A9 uses HIDL. `PRODUCT_PACKAGES` lacks
-  `android.hardware.wifi@1.0-service` and
-  `android.hardware.wifi.supplicant@1.2-service`, so `WifiNative` says
-  "Failed to start supplicant" and Settings hangs when WiFi is toggled.
-  Add the services + manifest entries, rebuild, test.
-  Also `wificond` logs `NL80211_CMD_GET_PROTOCOL_FEATURES failed` (3.4
-  cfg80211 too old) — may need a tolerance patch or nl80211 backport.
-- **Baseband/RIL**: `ro.boot.modem=sprd` (Spreadtrum modem),
-  `gsm.version.baseband` empty — RIL is not running; needs the matching
-  rild/libril and props.
-- Remaining HALs: sensors, camera, light/power, soundtrigger, audio policy
-  outputs (partially configured).
-- 4 GB system resize module / all-in-one flashable zip still to build.
+Patch 0023 allocates buffers with the local gralloc0 device and imports them
+through the mapper. The mapper **clones** the handle; the nvmap memory belongs
+to the original handle and was never freed.
 
-## Useful debugging recipes
+Patch 0026 (`libs/ui/Gralloc2.cpp`) keeps a `clone -> original` map and frees
+the original in `Mapper::freeBuffer()`. After the fix the total stays around
+250-290 MB and there are no EGL failures.
 
-```bash
-# Current display stack health
-adb shell 'dumpsys window | grep mCurrentFocus'
-adb shell 'logcat -d | grep -cE "EGL_BAD_ALLOC|Fatal signal"'
-# Gralloc/composer verbose
-adb shell 'logcat -d | grep -E "pisces: |forcing layer|registerBuffer"'
-# Kernel boot/PMIC diagnostics from TWRP
-adb shell 'tail -40 /proc/last_kmsg'
-adb shell 'grep -c VSYS_MON /proc/last_kmsg'
-# CPU/power state
-adb shell 'cat /sys/devices/system/cpu/online; cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq'
-```
+### 3. Touch misalignment — not reproducible
 
-Notes:
-- `top`/heavy adb commands hang under load; prefer short commands.
-- If system boot loops 2-3 s after Mi logo: it is the battery/VSYS issue
-  unless the 510 MHz cap was lost.
-- When editing init.pisces.rc always keep the low-power cap and the
-  post-boot restore.
-- Each source change should be committed to the device repo and pushed
-  (`patches/` + `ramdisk/` + `STATUS.md`).
+Raw coordinates verified in TWRP: the four corners report 4.4%/1.6%,
+95.2%/2.1%, 5.7%/96.7%, 96.3%/99.2%, centre 50.8%/53.8% — the driver mapping
+is correct. A single wrong long-press was reported once, never reproduced.
+
+## WiFi / Bluetooth / camera (this session's new work)
+
+### WiFi — HAL starts, chip config still fails
+
+The BCM43341 `bcmdhd` driver is built into the kernel (`CONFIG_BCMDHD=y`) and
+`wlan0`/`p2p0` exist; only the A9 userspace stack was missing. Added
+`android.hardware.wifi@1.0-service`, `libwifi-hal`, HIDL `wpa_supplicant`, and
+manifest entries (single `<version>` per HAL — libvintf rejects one version per
+major twice).
+
+State: the HAL service runs and registers wifi 1.0/1.1/1.2, `wpa_supplicant`
+runs, `WifiVendorHal: Vendor Hal started successfully`, then
+`HalDevMgr: executeChipReconfiguration: configureChip error: 9` (ERROR_UNKNOWN)
+and `Failed to create STA iface`.
+
+`WifiChip::handleChipConfiguration()` fails at either
+`WifiModeController::changeFirmwareMode()` (writes
+`/sys/module/bcmdhd/parameters/firmware_path`, which was root-only — now chowned
+to wifi in init.pisces.rc) or `WifiLegacyHal::start()` (`wifi_initialize()` of
+`libwifi-hal-bcm`). The firmware path write now succeeds, so the failure is in
+the legacy HAL start; next step is to instrument `libwifi-hal-bcm`'s
+`wifi_initialize()`.
+
+Also: `wificond` logs `NL80211_CMD_GET_PROTOCOL_FEATURES failed` (3.4 cfg80211
+is too old) — it continues without it.
+
+### Bluetooth — needs the app back in the image
+
+`android.hardware.bluetooth@1.0-service` + `libbt-vendor`
+(hardware/broadcom/libbt) are in the image and the HAL registers.
+`/dev/ttyHS2` (bluetooth:bluetooth), `bt_vendor.conf` and `bcm43341.hcd` are in
+place. The blocker was the `Bluetooth` app: `lineage_pisces.mk` is inherited
+*after* `device_pisces.mk` and still had
+`PRODUCT_PACKAGES := $(filter-out Bluetooth NfcNci,...)`, which silently undid
+the request. That line now only filters NfcNci.
+
+### Camera — HAL loads, open fails inside the blob
+
+Added: `camera.pisces` wrapper, `camera.provider@2.4-service` + `-impl`,
+`camera.device@1.0/3.2/3.3/3.4/3.4-external-impl`, `libyuv`, `Snap` +
+`Camera2`, and `libpisces_camshim`.
+
+The 2013 blob (2013 `SensorManager` ABI, TEXTREL in `libFaceProc.so`) is loaded
+via `LD_PRELOAD=/system/lib/libpisces_camshim.so` on the camera provider
+service, defined in `init.pisces.rc` (init parses it before
+`/vendor/etc/hw/...rc`, so the stock definition is ignored). The shim provides
+the 10 Android 4.x `SensorManager`/`SensorEventQueue`/`Singleton` symbols and
+drops the process target SDK to 22 so bionic accepts TEXTREL.
+
+Result: `CameraWrapper: camera count = 2` (both cameras enumerate). Opening
+camera 0 fails inside the blob:
+`NvCameraHal: setupHalInLock:539 failed to open camera! Error: 0x3`, and the
+destructor of the half-constructed `NvCameraHal` (`SetBufferConfigStage`)
+crashes the provider. Next step: find out what NvError 0x3 is in
+`setupHalInLock` (likely the NvMM/ISP block or sensor power-up).
+
+The wrapper no longer waits minutes for `sensorservice` (there is no sensors
+HAL; the sensor entry points are stubbed).
+
+## Kernel
+
+Unchanged this session (`e3d9500e` binder FDA + nvmap import). Known perf issue
+not yet addressed: nvmap prints `pr_info("pisces: from_id ...")` for every
+cross-process import; those should be gated behind a module parameter.
+
+## Late-session findings (camera / BT / wifi)
+
+### WiFi — now enables (four separate blockers)
+
+1. The HAL service needs the `inet` group: `CONFIG_ANDROID_PARANOID_NETWORK=y`
+   makes `socket(AF_INET)` fail with EACCES, and a 3.4 kernel has no ambient
+   capabilities so the stock rc `capabilities NET_ADMIN NET_RAW SYS_MODULE`
+   line is silently dropped by init (`capabilities requested but the kernel
+   does not support ambient capabilities`).  Fixed by overriding the service
+   in `init.pisces.rc` with `group wifi gps inet`.
+2. `libwifi-hal` failed `wifi_initialize()` because bcmdhd publishes no
+   nl80211 `vendor` multicast group ("Could not find group vendor" ->
+   "Add membership failed" -> WIFI_ERROR_NOT_AVAILABLE).  Now tolerated.
+3. wificond dropped every interface ("No usable interface found") because the
+   3.4 `nl80211_send_iface` does not put `NL80211_ATTR_MAC` in the
+   `NEW_INTERFACE` dump.  Kernel patch added (see `kernel-patches/`).
+4. wpa_supplicant deinitialised wlan0 because
+   `/proc/sys/net/ipv4/conf/wlan0/drop_unicast_in_l2_multicast` (Linux 3.14+)
+   is missing; `nl80211_write_to_file()` now skips ENOENT.
+
+State: `dumpsys wifi` = enabled, supplicant has the STA interface
+(DISCONNECTED = ready), the chip is configured and scans work.
+`firewall`/`vendor` group warnings remain but are harmless.
+
+### Camera — icon restored, HAL stops at NvMM
+
+- The missing launcher icon was **Snap's own doing**: `DisableCameraReceiver`
+  runs at BOOT_COMPLETED, asks the old camera API for the camera count and
+  calls `setComponentEnabledSetting(DISABLED)` on `CameraLauncher` when it is
+  0.  With the camera service now enumerating, `pm enable
+  org.lineageos.snap/com.android.camera.CameraLauncher` restores the icon.
+- `/sys/power/wake_lock` is `radio:wakelock 0660`; the camera HAL needs write
+  access or every open fails with "could not acquire camera wake lock".
+  Now chmod 0666 in `init.pisces.rc`.
+- `libpisces_camshim`'s `createEventQueue()` stub had the ARM sret/this
+  argument order swapped, corrupting the SensorManager object and crashing in
+  `NvCameraHal::CleanupSensorListener()`.
+- Remaining: `libnvmm_camera.so` wants `/dev/video0` and `/dev/video1`, which
+  do not exist.  `CONFIG_VIDEO_TEGRA` + a `tegra_camera` platform device were
+  added to board-pisces.c, but the V4L2 host still does not create the node
+  (`vi vi: initialized` only).  The stock board likely registers an nvhost
+  "vi" device carrying `tegra_camera_platform_data` instead.  Until then the
+  HAL fails in `NvCameraHalBlockHelpers` ("Component handle is invalid") and
+  returns NvError 0x3 (NotFound) from `setupHalInLock`.
+
+### Bluetooth — firmware loads, HCI does not answer
+
+- `bdaddr` and `rfkill0` handled; the adapter now reports
+  00:22:33:44:77:00, libbt downloads the firmware
+  ("Firmware configured in 12.765s") and the stack starts.
+- `bt_hci: command_timed_out ... opcode 0xc03` (HCI Reset) - the controller
+  never answers on `/dev/ttyHS2`.  libbt uses `CRTSCTS`.  Next: check the
+  post-download baud switch (`UART_TARGET_BAUD_RATE 3000000` in
+  `hardware/broadcom/libbt/include/bt_vendor_brcm.h`) and compare with
+  `/vendor/bin/nv_hciattach`, the NVIDIA tool the stock ROM used.
+
+## Next steps
+
+1. WiFi: instrument `libwifi-hal-bcm`'s `wifi_initialize()` /
+   `WifiLegacyHal::start()` to find why the chip configuration returns
+   ERROR_UNKNOWN.
+2. Camera: NvError 0x3 from `setupHalInLock`; also make the provider dump a
+   tombstone instead of crashing the destructor.
+3. Sensors HAL (there is none, which is why the camera wrapper had to skip the
+   sensorservice wait).
+4. Baseband/RIL: `ril-daemon` and `gps-daemon` start and exit; `ro.boot.modem=sprd`
+   and `libril-xiaomi-sprd.so` exist.
+5. Gate the nvmap debug prints.
 
 ## Repo commits (latest)
 
-- device `lineage-16.0`: `650018a` (HW_TEXTURE), `df81701` (local alloc +
-  client composition + handle clone), `a7801cc` (510 MHz boot), `528285c`,
-  `2186b95`, ...
-- kernel `lineage-16.0-113`: `e3d9500e` (binder FDA + nvmap import + ignore).
+- device `lineage-16.0`: `343c380` four cores online, `b0b76e6` wifi/bt/camera
+  + nvmap leak fix, `4e3118e` camera app + bounded sensorservice wait.
+- kernel `lineage-16.0-113`: `e3d9500e`.
+- patches: 0026 (gralloc free), 0027 + `hardware-overlay/` (camera wrapper and
+  shim). 0023-0025 still need to be applied by hand (they span projects).
