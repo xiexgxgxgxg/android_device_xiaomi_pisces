@@ -251,3 +251,5 @@ PRODUCT_PACKAGES += \
 # crash-loop during first boot, which soft-restarts the framework. Keep them
 # out of the image until those are functional.
 PRODUCT_PACKAGES := $(filter-out Bluetooth NfcNci,$(PRODUCT_PACKAGES))
+
+PRODUCT_PACKAGES += PiscesStub

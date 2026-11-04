@@ -10,3 +10,6 @@ PRODUCT_MANUFACTURER := Xiaomi
 
 TARGET_SCREEN_WIDTH := 1080
 TARGET_SCREEN_HEIGHT := 1920
+
+# pisces: remove the crash-looping Bluetooth/NFC apps; see device_pisces.mk.
+PRODUCT_PACKAGES := $(filter-out Bluetooth NfcNci,$(PRODUCT_PACKAGES))
