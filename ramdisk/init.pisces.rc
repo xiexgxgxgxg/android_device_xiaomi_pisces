@@ -333,6 +333,12 @@ on boot
     # pisces: the A9 wifi HAL rewrites the firmware path to select the STA/AP
     # image; the node is root-only by default, so the write fails and chip
     # configuration aborts with ERROR_UNKNOWN.
+    # pisces: the tegra camera HAL acquires /sys/power/wake_lock on open and
+    # fails the whole open ("AcquireWakeLock-- (error: could not acquire camera
+    # wake lock)") because the node is radio:wakelock 0660.
+    chmod 0666 /sys/power/wake_lock
+    chmod 0666 /sys/power/wake_unlock
+
     chown wifi wifi /sys/module/bcmdhd/parameters/firmware_path
     chmod 0660 /sys/module/bcmdhd/parameters/firmware_path
     chown system system /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq
@@ -563,6 +569,16 @@ service dns_masq /system/bin/dnsmasq --no-daemon --no-resolv --no-poll --dhcp-op
     disabled
     oneshot
 
+# pisces: the stock rc starts this HAL with "group wifi gps".  With
+# CONFIG_ANDROID_PARANOID_NETWORK the socket(AF_INET) it needs is denied
+# without the inet group, and this kernel (3.4) has no ambient capabilities so
+# the rc "capabilities" line cannot be used at all.  This definition is parsed
+# before /vendor/etc/init, so it wins over the stock one.
+service vendor.wifi_hal_legacy /vendor/bin/hw/android.hardware.wifi@1.0-service
+    class hal
+    user wifi
+    group wifi gps inet
+
 # pisces: Android 9 uses the HIDL supplicant (/vendor/bin/hw/wpa_supplicant),
 # started lazily by hwservicemanager through these interface declarations; the
 # framework never spawns it itself.  The legacy 8.x daemon that used to be
@@ -585,9 +601,8 @@ service wpa_supplicant /vendor/bin/hw/wpa_supplicant \
 service vendor.camera-provider-2-4 /vendor/bin/hw/android.hardware.camera.provider@2.4-service
     class hal
     user cameraserver
-    group audio camera input drmrpc
+    group audio camera input drmrpc wakelock
     ioprio rt 4
-    capabilities SYS_NICE
     setenv LD_PRELOAD /system/lib/libpisces_camshim.so
     writepid /dev/cpuset/camera-daemon/tasks /dev/stune/top-app/tasks
 
@@ -685,10 +700,10 @@ on property:sys.boot_completed=1
     # pisces: four cores are kept online by pisces_cpu.sh; re-assert the
     # battery-safe frequency cap for the case where a core was re-onlined
     # later (a new cpufreq policy starts at 1.8 GHz, which resets the phone).
-    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 816000
-    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_max_freq 816000
-    write /sys/devices/system/cpu/cpu2/cpufreq/scaling_max_freq 816000
-    write /sys/devices/system/cpu/cpu3/cpufreq/scaling_max_freq 816000
+    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 1224000
+    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_max_freq 1224000
+    write /sys/devices/system/cpu/cpu2/cpufreq/scaling_max_freq 1224000
+    write /sys/devices/system/cpu/cpu3/cpufreq/scaling_max_freq 1224000
 
     write /sys/block/mmcblk0/queue/scheduler cfq
     write /sys/devices/system/cpu/cpufreq/interactive/boost 0

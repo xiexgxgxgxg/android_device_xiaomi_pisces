@@ -532,6 +532,12 @@ static int camera_dump(struct camera_device *device, int fd)
 
 extern "C" void heaptracker_free_leaked_memory(void);
 
+// pisces: the 2013 tegra HAL can be opened exactly once per camera: its close
+// path double-releases a refcount and aborts the provider.  The framework opens
+// the camera during enumeration (to read SUPPORTED_FLASH_MODES) and then again
+// when an app connects, so keep one vendor device per camera id and reuse it.
+static camera_device_t *gVendorDevices[4] = { NULL, NULL, NULL, NULL };
+
 static int camera_device_close(hw_device_t *device)
 {
     wrapper_camera_device_t *wrapper_dev = reinterpret_cast<wrapper_camera_device_t *>(device);
@@ -547,6 +553,12 @@ static int camera_device_close(hw_device_t *device)
     }
 
     wrapper_dev->vendor->common.close((hw_device_t*)wrapper_dev->vendor);
+    // note: the vendor device is not reusable after close; drop it from the cache
+    for (size_t i = 0; i < sizeof(gVendorDevices) / sizeof(gVendorDevices[0]); i++) {
+        if (gVendorDevices[i] == wrapper_dev->vendor) {
+            gVendorDevices[i] = NULL;
+        }
+    }
     if (wrapper_dev->base.ops)
         delete wrapper_dev->base.ops;
     delete wrapper_dev;
@@ -566,6 +578,27 @@ done:
  * assume camera service will keep singleton of each camera
  * so this function will always only be called once per camera instance
  */
+
+static camera_device_t *openVendorDeviceLocked(int id, const char *name)
+{
+    if (id < 0 || id >= (int)(sizeof(gVendorDevices) / sizeof(gVendorDevices[0])))
+        return NULL;
+
+    if (gVendorDevices[id] != NULL) {
+        ALOGW("reusing vendor camera %d (single-open HAL)", id);
+        return gVendorDevices[id];
+    }
+
+    camera_device_t *dev = NULL;
+    int rv = getVendorModule()->common.methods->open(
+            (const hw_module_t*)getVendorModule(), name, (hw_device_t**)&dev);
+    if (rv != 0 || dev == NULL) {
+        ALOGE("vendor camera open failed for %s: %d", name, rv);
+        return NULL;
+    }
+    gVendorDevices[id] = dev;
+    return dev;
+}
 
 static int camera_device_open(const hw_module_t *module, const char *name,
         hw_device_t **device)
@@ -615,27 +648,17 @@ static int camera_device_open(const hw_module_t *module, const char *name,
         // entry points the blob calls are stubbed by libpisces_camshim, so a
         // short bounded wait is enough.  Waiting for the binder service here
         // blocked camera provider start-up for minutes.
-        for (int i = 0; i < 3; i++) {
-            status_t err = getService(sensorServiceName, &sensorServer);
-            if (err == NAME_NOT_FOUND) {
-                ALOGI("Waiting for sensorservice ...");
-                sleep(1);
-                continue;
-            }
-            if (err != NO_ERROR) {
-                ALOGW("getService(sensorservice) failed: %d, continuing", err);
-                break;
-            }
-            break;
-        }
+        // pisces: no sensors HAL exists on this device and libpisces_camshim
+        // stubs every sensor entry point the blob uses, so do not wait at all.
+        // Each binder lookup here blocked for ~6 s.
+        (void)sensorServer;
     }
 
     ALOGV("calling vendor camera_device_open ...");
-    rv = getVendorModule()->common.methods->open(
-            (const hw_module_t*)getVendorModule(), name,
-            (hw_device_t**)&(camera_device->vendor));
-    if (rv) {
+    camera_device->vendor = openVendorDeviceLocked(cameraid, name);
+    if (camera_device->vendor == NULL) {
         ALOGE("vendor camera open fail");
+        rv = -ENODEV;
         goto fail;
     }
     ALOGV("%s: got vendor camera device 0x%08X",

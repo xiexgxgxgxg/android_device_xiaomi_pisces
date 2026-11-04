@@ -52,8 +52,14 @@ void *_ZN7android13SensorManager16getDefaultSensorEi(void *self, int type) {
 }
 
 /* android::sp<android::SensorEventQueue> SensorManager::createEventQueue()
- * returns a struct: r0 = this, r1 = hidden return slot. */
-void *_ZN7android13SensorManager16createEventQueueEv(void *self, void *ret) {
+ *
+ * The return type is a non-trivial class, so the ARM C++ ABI passes a hidden
+ * pointer to the return slot as the FIRST argument (r0) and `this` second (r1).
+ * Getting this backwards corrupts the SensorManager object and hands back a
+ * bogus sp<SensorEventQueue>, which later aborts in
+ * NvCameraHal::CleanupSensorListener() with "decStrong() called ... too many
+ * times".  Return an empty sp. */
+void *_ZN7android13SensorManager16createEventQueueEv(void *ret, void *self) {
     (void)self;
     *(void **)ret = 0;
     return ret;

@@ -1,0 +1,14 @@
+--- a/net/wireless/nl80211.c
++++ b/net/wireless/nl80211.c
+@@ -1494,6 +1494,13 @@ static int nl80211_send_iface(struct sk_buff *msg, u32 pid, u32 seq, int flags,
+ 	NLA_PUT_U32(msg, NL80211_ATTR_IFTYPE, dev->ieee80211_ptr->iftype);
+ 
++	/* pisces: mainline reports the interface MAC in NEW_INTERFACE dumps;
++	 * 3.4 does not, so wificond (Android 9) drops every interface with
++	 * "Failed to get interface mac address" -> "No usable interface found".
++	 */
++	NLA_PUT(msg, NL80211_ATTR_MAC, ETH_ALEN, dev->dev_addr);
++
+ 	NLA_PUT_U32(msg, NL80211_ATTR_GENERATION,
+ 		    rdev->devlist_generation ^
+ 			(cfg80211_rdev_list_generation << 2));
