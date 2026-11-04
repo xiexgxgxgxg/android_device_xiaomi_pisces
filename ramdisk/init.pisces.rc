@@ -602,6 +602,20 @@ service charger /sbin/healthd -c
     critical
     seclabel u:r:healthd:s0
 
+# pisces: bluedroid_pm exposes the BCM43341 power switch as rfkill0 and it
+# comes up blocked, so the controller never answers on the UART.
+on boot
+    write /sys/class/rfkill/rfkill0/state 1
+
+# pisces: the A9 Bluetooth HAL aborts with "Open: No Bluetooth Address!" when
+# /data/misc/bluetooth/bdaddr is missing; the factory address ships next to the
+# BT config files.
+on post-fs-data
+    mkdir /data/misc/bluetooth 0770 bluetooth bluetooth
+    copy /system/etc/bluetooth/bdaddr /data/misc/bluetooth/bdaddr
+    chown bluetooth bluetooth /data/misc/bluetooth/bdaddr
+    chmod 0660 /data/misc/bluetooth/bdaddr
+
 on property:init.svc.charger=running
     write /sys/class/input/input1/enabled 0
     write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor userspace
