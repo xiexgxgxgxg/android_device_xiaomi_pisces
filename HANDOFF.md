@@ -323,6 +323,36 @@ order of promise:
   `nvavp_os_0ff00000.bin` plausibly carries the trpc service).
 - Verify against a stock boot: `dmesg | grep -i 'trpc_node_register'` on MIUI.
 
+## Audio (session 4): what the hardware actually looks like
+
+There is **no sound** and the reason is structural.  Findings:
+
+- The framework runs the AOSP **stub** HAL (`/vendor/lib/hw/audio.primary.default.so`)
+  because the real one is installed as `/system/lib/hw/audio.primary.tegra.so`
+  while `hw_get_module("audio.primary")` looks for `audio.primary.pisces.so`.
+- Renaming the vendor HAL makes it load (after also providing the NVIDIA
+  `libtinyalsa.so`, which exports `mixer_dup`/`mixer_ctl_convert_from_db`; the
+  MIUI dump has a working one) but `open()` then returns `EINVAL`.  It is an
+  Android 4.x HAL and waits on services A9 does not have (`media.audio_policy`,
+  `nvaudioservice`), so porting it is not a rename job.
+- The topology is I2S -> **ES325 voice processor** (`cpu_dai_name =
+  "es325-portd"` in `tegra_cs42l73.c`) -> **CS42L73** codec -> speaker.  The
+  ES325 has to be programmed (its `Internal Route Config`/`Preset` controls,
+  currently "Audio route reset") before any audio reaches the codec.
+- The speaker itself is on the **ESL** path of the codec, not the SPK path:
+  `Int Spk` <- `SPKLINEOUT` <- `SPKLO Amp` <- `ESL DAC` <- `ESL Mixer` <-
+  `ESL-ASP Mux`, and `Int Spk` drives `gpio-108 (spkr_en)` which enables the
+  external speaker amp.  Useful mixer controls: `ESL-ASP Mono Volume` (0 now),
+  `Ear Speaker Digital Playback Volume` (188), `Int Spk Switch` (on).
+- Plain `tinyplay` on pcm0p and pcm2p leaves every DAPM widget Off
+  (`/sys/kernel/debug/asoc/tegra-cs42l73/...`), i.e. the chain never powers -
+  the ES325 front-end PCM needs configuration that the vendor HAL used to do.
+
+Next step: write a small A9 audio HAL (`audio.primary.pisces.so`, the A9 HIDL
+wrapper still accepts a legacy `audio_hw_device_t`) that opens the ALSA PCM
+with tinyalsa, programs the ES325 route and the codec's ESL path, and enables
+`spkr_en`.  The nvaudio_conf.xml route tables are the reference.
+
 ## Next steps
 
 1. WiFi: instrument `libwifi-hal-bcm`'s `wifi_initialize()` /
