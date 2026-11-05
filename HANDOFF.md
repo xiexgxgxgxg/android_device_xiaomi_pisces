@@ -443,28 +443,59 @@ Debug logging still in place (search for TetherDbg / UsbPrefDbg) - remove before
 shipping.
 
 
-### MTP: where it stands
+### MTP (session 7): WORKS - three bugs, all fixed
 
-Boot composition is now mtp,adb (init.pisces.rc on boot + the HAL keeps mtp in
-every adb-only composition so /dev/ffs-mtp/ep0 exists when UsbDeviceManager
-opens its control node).  The leftover NVIDIA usb rules
-(init.nv_dev_board.usb.rc, which composed mtp,mass_storage,adb with a factory
-cdrom ISO and Xiaomi PIDs) are disabled - they were racing with ours and the
-phone enumerated as 2717:0368 with no adb.
+The host auto-mounts the phone and can list/read /storage/emulated/0 (gvfs:
+17 entries, PNG read back with the right header).  adb and MTP run together
+(18d1:4ee2, kernel functions `mtp,ffs`).
 
-Still open: with the phone unlocked, picking "File transfer" in the USB
-preferences does not stick and the host never shows the storage.  Next things to
-check, in order:
-1. `ls /dev/ffs-mtp/` after selecting MTP - if the node is missing the mtp
-   function is not binding (same class of problem as adb+rndis),
-2. `sys.usb.state` after the switch,
-3. logcat for "no ffs control for mtp" (our fallback) and for MtpService,
-4. whether the framework reverts because USB_DATA_UNLOCKED is false.
+1. **`usbd` forced MTP-only at every boot.**  `system/core/usbd/usbd.cpp`
+   starts from late_start and, unless `persist.sys.usb.config` is exactly
+   `adb`, called `IUsbGadget.setCurrentUsbFunctions(MTP)`.  That ran ~1 s
+   after init had installed `mtp,adb`, so every boot ended MTP only
+   (idProduct 4ee1, adbd stopped): the "no adb, charging only" state.
+   The daemon no longer touches the gadget; it only starts adbd when the
+   persistent prop is `adb`.  `init.pisces.rc` owns the boot composition.
+2. **The gadget HAL built the composition string in the wrong order.**
+   MTP+ADB became `adb,mtp`; no init rule matches that spelling, so
+   `sys.usb.state` never changed, the callback timed out and UsbDeviceManager
+   reverted - which is why choosing "File transfer" never stuck.  It now emits
+   `mtp,adb` / `ptp,adb` (data function first, adb last) and maps the kernel's
+   `ffs` back to ADB in `getCurrentUsbFunctions`.
+3. **adb was bound to the legacy f_adb function.**  f_adb waits for
+   `/dev/android_adb` and keeps the whole gadget disabled until userspace opens
+   it, while Android 9's adbd only knows FunctionFS (`/dev/usb-ffs/adb`).
+   The init rules now bind `mtp,ffs` / `ptp,ffs` / `ffs` (TWRP's
+   `/init.recovery.usb.rc` uses the same trick) and `start adbd`, while
+   `sys.usb.state` still carries the name the framework requested.
 
-Note the debugging loop is painful here: every USB switch drops adb, so use the
-detached-script + /data file trick that worked for rndis:
-  setsid sh -c '<switch commands>; ip link > /data/local/tmp/x.log' &
-then replug and read the file.
+MTP itself uses the legacy kernel driver: `MtpServer` picks `MtpDevHandle` when
+`/dev/usb-ffs/mtp/ep0` is absent and opens `/dev/mtp_usb` (0660 root:mtp).
+MediaProvider requests `android.permission.ACCESS_MTP`, which `platform.xml`
+maps to gid `mtp`, so the media process gets group 1024 and can open it - no
+extra chmod needed.  (The kernel's `mtp_file_range`/`mtp_event` ABI matches
+`bionic/libc/kernel/android/uapi/linux/usb/f_mtp.h` exactly.)
+
+Verified after flashing (2026-11-06 ~00:20):
+
+- boot: `sys.usb.config=mtp,adb`, kernel functions `mtp,ffs`, 4ee2, adb up.
+- after `boot_completed` the framework applies charging functions: adb-only
+  (4ee7) - stock Android behaviour.  Selecting File transfer from the USB
+  notification, or `svc usb setFunctions mtp`, gives 4ee2 again.
+- `dumpsys usb`: connected=true configured=true current_functions=MTP
+  applied=true kernel_state=CONFIGURED kernel_function_list=mtp,ffs.
+- MtpService: "starting MTP server in MTP mode ... unlocked",
+  "Adding MTP storage:/storage/emulated/0"; media process fd -> /dev/mtp_usb.
+- PTP: 4ee6, MtpService restarts in PTP mode.
+- charging only: 4ee7, functions=ffs.
+- simulated cable pull (`echo disconnect > /sys/class/udc/tegra-udc.0/soft_connect`):
+  the gadget re-enumerated by itself as 4ee7 ~9 s later and adb came back.
+
+`/cache/usb-debug.txt` (written by `/system/etc/usbfix.sh`... actually by
+`usbdebug.sh` at post-fs-data) dumps the gadget state each boot and is the
+quickest way to see the composition without adb; `usbfix.sh` (which rewrote
+`functions ffs` in a loop and fought the framework) has been removed from
+init.pisces.rc.
 
 ## Next steps
 

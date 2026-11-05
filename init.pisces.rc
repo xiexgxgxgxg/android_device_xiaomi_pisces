@@ -13,6 +13,18 @@ import init.modem_${ro.boot.modem}.rc
 import init.quickboot.rc
 
 on early-init
+    # pisces: the aged battery cannot carry the full boot current; keep all
+    # four cores but cap the frequency and dim the panel during boot.
+    write /sys/devices/system/cpu/cpu1/online 1
+    write /sys/devices/system/cpu/cpu2/online 1
+    write /sys/devices/system/cpu/cpu3/online 1
+    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor interactive
+    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 510000
+    # pisces: several HALs are still missing and their 5s service waits add up
+    # to >60s during system_server start; scale the framework timeouts.
+    setprop ro.hw_timeout_multiplier 10
+    # the binderized mapper service breaks Gralloc2 (must be passthrough)
+    stop vendor.gralloc-2-0
     # pisces: 3.4 kernel uses the legacy android_usb gadget; adbd needs
     # functionfs mounted explicitly (the configfs path A9 defaults to does not
     # exist here).
@@ -35,16 +47,9 @@ on init
     # mkdir /storage/sdcard1 0700 root root
 
     export EXTERNAL_STORAGE /storage/emulated/legacy
-    export EMULATED_STORAGE_SOURCE /mnt/shell/emulated
     # pisces: no vold yet; zygote aborts if it tries to mount tmpfs there
     # export EMULATED_STORAGE_TARGET /storage/emulated
     export SECONDARY_STORAGE /storage/usbdisk
-
-    # Support legacy paths
-    symlink /storage/emulated/legacy /sdcard
-    symlink /storage/emulated/legacy /mnt/sdcard
-    symlink /storage/emulated/legacy /storage/sdcard0
-    symlink /mnt/shell/emulated/0 /storage/emulated/legacy
 
     # create directory for mounting usb drives
     mkdir /mnt/media_rw/usbdisk 0700 media_rw media_rw
@@ -76,9 +81,6 @@ on fs
 
     exec /system/bin/sh /system/bin/upgrade_layout.sh
 
-    # sdcard service is sometimes too slow and can't create nodes properly
-    start sdcard
-
     mkdir /mnt/modem/data 0770 root radio
     mkdir /mnt/modem/data/factory 0770 root radio
     exec /system/bin/conn_init -o
@@ -86,7 +88,13 @@ on fs
     chown system system /persist/serialno
     chmod 0400 /persist/serialno
 
-on post-fs-data
+# pisces: the ES325 voice processor sits between the I2S and the CS42L73 and
+# must run its firmware before the codec's DAPM path can power up - without it
+# every es325 i2c write NAKs (-121), the codec stays Off and there is no sound.
+# The audience_fw service (see below) already loads it via vpcmd; do not add a
+# second loader, the two race on the ES325 and both fail.
+
+    # pisces: vold does not run yet; userdirs.sh creates the DE/CE dirs.
     mkdir /data/misc/wifi 0770 wifi wifi
     mkdir /data/misc/wifi/sockets 0770 wifi wifi
     mkdir /data/misc/wifi/firmware 0770 wifi wifi
@@ -123,10 +131,109 @@ on post-fs-data
     rm /dev/sysmatdrv
 
 on early-boot
-    exec /system/bin/sh /system/bin/load_audience_fw.sh --log
-    exec /system/bin/sh /system/bin/atmel_fw_update.sh
+    # pisces: run these in the background; the audience firmware loader can
+    # block forever on the ES325 UART, which hangs init and resets the device.
+    start audience_fw
+    start atmel_fw
+
+on init
+    # pisces: the vendor HCD download in libbt hangs the BCM43341 (it stops
+    # answering HCI at any baud until BT_REG_ON is power cycled), and the chip
+    # speaks HCI fine on its ROM firmware.  hardware.c honours this property.
+    setprop persist.pisces.bt.skip_fw 1
+
+
+
+# pisces: this kernel only provides the legacy android_usb gadget, while AOSP's
+# init.usb.rc ships configurations for accessory/audio/adb only and the
+# init.usb.configfs.rc ones cannot work without /config/usb_gadget.  These rules
+# cover every composition the framework asks for through the IUsbGadget HAL.
+# rndis is deliberately NOT listed here: the gadget needs a pause between
+# "enable 0" and the new composition, init runs the writes back to back and the
+# netdev never appeared, so the IUsbGadget HAL handles rndis itself.
+#
+# adb never runs over the legacy f_adb function on this kernel: f_adb waits for
+# /dev/android_adb and keeps the whole gadget disabled until userspace opens it
+# (and its descriptor string is "adb"), while Android 9's adbd only knows
+# FunctionFS (/dev/usb-ffs/adb).  Every composition that asks for adb therefore
+# binds the ffs function and starts adbd, which is what makes the ffs interface
+# appear.  sys.usb.state still carries the name the framework requested, since
+# that is what it polls, and the IUsbGadget HAL maps ffs back to ADB.
+on property:sys.usb.config=adb
+    write /sys/class/android_usb/android0/enable 0
+    write /sys/class/android_usb/android0/functions ffs
+    write /sys/class/android_usb/android0/idVendor 18d1
+    write /sys/class/android_usb/android0/idProduct 4ee7
+    write /sys/class/android_usb/android0/bDeviceClass 0
+    write /sys/class/android_usb/android0/enable 1
+    start adbd
+    setprop sys.usb.state ${sys.usb.config}
+
+on property:sys.usb.config=mtp
+    write /sys/class/android_usb/android0/enable 0
+    write /sys/class/android_usb/android0/functions mtp
+    write /sys/class/android_usb/android0/idVendor 18d1
+    write /sys/class/android_usb/android0/idProduct 4ee1
+    write /sys/class/android_usb/android0/bDeviceClass 0
+    write /sys/class/android_usb/android0/enable 1
+    setprop sys.usb.state ${sys.usb.config}
+
+on property:sys.usb.config=mtp,adb
+    write /sys/class/android_usb/android0/enable 0
+    write /sys/class/android_usb/android0/functions mtp,ffs
+    write /sys/class/android_usb/android0/idVendor 18d1
+    write /sys/class/android_usb/android0/idProduct 4ee2
+    write /sys/class/android_usb/android0/bDeviceClass 0
+    write /sys/class/android_usb/android0/enable 1
+    start adbd
+    setprop sys.usb.state ${sys.usb.config}
+
+on property:sys.usb.config=ptp
+    write /sys/class/android_usb/android0/enable 0
+    write /sys/class/android_usb/android0/functions ptp
+    write /sys/class/android_usb/android0/idVendor 18d1
+    write /sys/class/android_usb/android0/idProduct 4ee5
+    write /sys/class/android_usb/android0/bDeviceClass 0
+    write /sys/class/android_usb/android0/enable 1
+    setprop sys.usb.state ${sys.usb.config}
+
+on property:sys.usb.config=ptp,adb
+    write /sys/class/android_usb/android0/enable 0
+    write /sys/class/android_usb/android0/functions ptp,ffs
+    write /sys/class/android_usb/android0/idVendor 18d1
+    write /sys/class/android_usb/android0/idProduct 4ee6
+    write /sys/class/android_usb/android0/bDeviceClass 0
+    write /sys/class/android_usb/android0/enable 1
+    start adbd
+    setprop sys.usb.state ${sys.usb.config}
+
+on property:sys.usb.config=none
+    write /sys/class/android_usb/android0/enable 0
+    write /sys/class/android_usb/android0/bDeviceClass 0
+    stop adbd
+    setprop sys.usb.state ${sys.usb.config}
 
 on boot
+    # pisces: /storage/emulated here is the raw UDA mount, owned by root, so
+    # com.android.bluetooth cannot create its receive directory and OBEX aborts
+    # with "can't create base directory /storage/emulated/0/bluetooth".
+    # There is no sdcardfs/FUSE daemon here: /storage/emulated is a plain
+    # directory owned by media_rw 0770 and /storage/emulated/0 is a bind of
+    # /data/media/0 owned by root 0755, so apps (e.g. com.android.bluetooth,
+    # which only has the read-only sdcard_r group) cannot even traverse it and
+    # OBEX aborts with "can't create base directory".  Widen both until the
+    # proper per-app view exists.
+    chmod 0771 /storage/emulated
+    chmod 0777 /data/media/0
+    mkdir /storage/emulated/0/bluetooth 0777 media_rw media_rw
+    chmod 0777 /storage/emulated/0/bluetooth
+
+    # pisces: cap all cores and dim the panel during boot
+    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_max_freq 510000
+    write /sys/devices/system/cpu/cpu2/cpufreq/scaling_max_freq 510000
+    write /sys/devices/system/cpu/cpu3/cpufreq/scaling_max_freq 510000
+    write /sys/class/backlight/lm3533-backlight0/brightness 20
+    write /sys/class/backlight/lm3533-backlight1/brightness 20
 #Add from init.rc
     # atomic allocations can get upto 5/8th of this size
     write /proc/sys/vm/min_free_kbytes 16384
@@ -319,6 +426,17 @@ on boot
     chown system system /sys/class/input/input5/enabled
     chown system system /sys/class/input/input6/enabled
     chown system system /sys/class/power_supply/max170xx_battery/current_avg
+    # pisces: the A9 wifi HAL rewrites the firmware path to select the STA/AP
+    # image; the node is root-only by default, so the write fails and chip
+    # configuration aborts with ERROR_UNKNOWN.
+    # pisces: the tegra camera HAL acquires /sys/power/wake_lock on open and
+    # fails the whole open ("AcquireWakeLock-- (error: could not acquire camera
+    # wake lock)") because the node is radio:wakelock 0660.
+    chmod 0666 /sys/power/wake_lock
+    chmod 0666 /sys/power/wake_unlock
+
+    chown wifi wifi /sys/module/bcmdhd/parameters/firmware_path
+    chmod 0660 /sys/module/bcmdhd/parameters/firmware_path
     chown system system /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq
     chown system system /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq
 
@@ -339,6 +457,13 @@ on boot
     write /sys/devices/platform/host1x/gr3d/devfreq/gr3d/max_freq 672000000
     write /sys/devices/system/cpu/cpufreq/interactive/hispeed_freq 1810500
     write /sys/devices/system/cpu/cpufreq/interactive/go_hispeed_load 65
+
+# pisces: the cpuquiet "runnable" governor cannot see GPU/sync bound load, so
+# it parks the system on CPU0 and never brings the other cores back - one
+# 1.02 GHz A15 cannot drive a 1080p client-composited UI.  pisces_cpu.sh takes
+# hotplug over and keeps all four cores online at a battery-safe frequency
+# (it polls until cpuquiet is enabled, so it is safe to start this early).
+    start pisces_cpu
 
 # Default Read Ahead value for sdcards
     write /sys/block/mmcblk0/queue/read_ahead_kb 2048
@@ -466,13 +591,8 @@ service iprenew_eth0 /system/bin/dhcpcd -n
     disabled
     oneshot
 
-service sdcard /system/bin/sdcard -u 1023 -g 1023 -l /data/media /mnt/shell/emulated
-    class late_start
-
-service fuse_usbdisk /system/bin/sdcard -u 1023 -g 1023 -w 1023 -d /mnt/media_rw/usbdisk /storage/usbdisk
-    class late_start
-    disabled
-
+# pisces: sdcard is started by vold (A9 FUSE mode); the legacy services below
+# conflicted with it and failed with "failed to sdcardfs_setup".
 # btmacwriter - to create unique BD address
 service btmacwriter /system/bin/btmacwriter
     class main
@@ -545,22 +665,54 @@ service dns_masq /system/bin/dnsmasq --no-daemon --no-resolv --no-poll --dhcp-op
     disabled
     oneshot
 
-service p2p_supplicant /system/bin/logwrapper /system/bin/wpa_supplicant \
-    -iwlan0 -Dnl80211 -c/data/misc/wifi/wpa_supplicant.conf \
-    -I/system/etc/wifi/wpa_supplicant_overlay.conf \
-    -O/data/misc/wifi/sockets -N \
-    -ip2p0 -Dnl80211 -c /data/misc/wifi/p2p_supplicant.conf \
-    -I/system/etc/wifi/p2p_supplicant_overlay.conf \
-    -puse_p2p_group_interface=1 -e/data/misc/wifi/entropy.bin \
-    -g@android:wpa_wlan0
-#   we will start as root and wpa_supplicant will switch to user wifi
-#   after setting up the capabilities required for WEXT
-#   user wifi
-#   group wifi inet keystore
+# pisces: rild needs the pre-M libcutils socket_loopback_client() (the vendor
+# libril-xiaomi-sprd.so references it) and 3.4 cannot use the stock rc's
+# "capabilities" line, so the service is defined here instead.  init parses
+# this file before /vendor/etc/init, so this definition wins.
+service ril-daemon /vendor/bin/hw/rild
+    class main
+    user radio
+    group radio cache inet misc audio log readproc wakelock
+    socket rild stream 660 root radio
+    socket rild-debug stream 660 radio system
+    setenv LD_PRELOAD /system/lib/libpisces_rilshim.so
+
+# pisces: the stock rc starts this HAL with "group wifi gps".  With
+# CONFIG_ANDROID_PARANOID_NETWORK the socket(AF_INET) it needs is denied
+# without the inet group, and this kernel (3.4) has no ambient capabilities so
+# the rc "capabilities" line cannot be used at all.  This definition is parsed
+# before /vendor/etc/init, so it wins over the stock one.
+service vendor.wifi_hal_legacy /vendor/bin/hw/android.hardware.wifi@1.0-service
+    class hal
+    user wifi
+    group wifi gps inet
+
+# pisces: Android 9 uses the HIDL supplicant (/vendor/bin/hw/wpa_supplicant),
+# started lazily by hwservicemanager through these interface declarations; the
+# framework never spawns it itself.  The legacy 8.x daemon that used to be
+# here talked to the old WifiNative and no longer exists.
+service wpa_supplicant /vendor/bin/hw/wpa_supplicant \
+    -Dnl80211 -iwlan0 -c/vendor/etc/wifi/wpa_supplicant.conf -g@android:wpa_wlan0
+    interface android.hardware.wifi.supplicant@1.0::ISupplicant default
+    interface android.hardware.wifi.supplicant@1.1::ISupplicant default
     class main
     socket wpa_wlan0 dgram 660 wifi wifi
     disabled
     oneshot
+
+# pisces: the 2013 tegra camera HAL needs two shims the A9 loader no longer
+# provides: the Android 4.x SensorManager entry points, and acceptance of the
+# text relocations in libFaceProc.so (the shim drops the process target SDK to
+# 22).  LD_PRELOAD is the only way to get them into the vendor module's linker
+# namespace.  This definition is parsed before /vendor/etc/init/..., so init
+# ignores the stock one.
+service vendor.camera-provider-2-4 /vendor/bin/hw/android.hardware.camera.provider@2.4-service
+    class hal
+    user cameraserver
+    group audio camera input drmrpc wakelock
+    ioprio rt 4
+    setenv LD_PRELOAD /system/lib/libpisces_camshim.so
+    writepid /dev/cpuset/camera-daemon/tasks /dev/stune/top-app/tasks
 
 on charger
     write /sys/class/backlight/lm3533-backlight0/brightness 100
@@ -572,6 +724,20 @@ service charger /sbin/healthd -c
     class charger
     critical
     seclabel u:r:healthd:s0
+
+# pisces: bluedroid_pm exposes the BCM43341 power switch as rfkill0 and it
+# comes up blocked, so the controller never answers on the UART.
+on boot
+    write /sys/class/rfkill/rfkill0/state 1
+
+# pisces: the A9 Bluetooth HAL aborts with "Open: No Bluetooth Address!" when
+# /data/misc/bluetooth/bdaddr is missing; the factory address ships next to the
+# BT config files.
+on post-fs-data
+    mkdir /data/misc/bluetooth 0770 bluetooth bluetooth
+    copy /system/etc/bluetooth/bdaddr /data/misc/bluetooth/bdaddr
+    chown bluetooth bluetooth /data/misc/bluetooth/bdaddr
+    chmod 0660 /data/misc/bluetooth/bdaddr
 
 on property:init.svc.charger=running
     write /sys/class/input/input1/enabled 0
@@ -624,14 +790,42 @@ service nv_power_low /system/bin/power_mode.sh 2
     oneshot
     disabled
 
+# pisces: the ImmVibe vibrator HAL loads libImmVibeJ.so/libpparam.so, which
+# carry text relocations that bionic only loads for API-22 targets.
+service vendor.vibrator-1-0 /vendor/bin/hw/android.hardware.vibrator@1.0-service
+    class hal
+    user system
+    group system
+    setenv LD_PRELOAD /system/lib/libpisces_camshim.so
+
 service immvibed /system/bin/immvibed
     setenv TMPDIR /tmp
+    # pisces: libpparam.so (the ImmVibe actuator parameter blob) carries text
+    # relocations, which bionic refuses to load for a process targeting API 23
+    # or newer; the shim drops the target SDK to 22.  Without it immvibed
+    # cannot initialise and every vibration is dropped with status -4.
+    setenv LD_PRELOAD /system/lib/libpisces_camshim.so
     class late_start
     user system
     group system
     oneshot
 
+service pisces_cpu /system/bin/sh /pisces_cpu.sh
+    class main
+    user root
+    group root system
+    oneshot
+    disabled
+
 on property:sys.boot_completed=1
+    # pisces: four cores are kept online by pisces_cpu.sh; re-assert the
+    # battery-safe frequency cap for the case where a core was re-onlined
+    # later (a new cpufreq policy starts at 1.8 GHz, which resets the phone).
+    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 1224000
+    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_max_freq 1224000
+    write /sys/devices/system/cpu/cpu2/cpufreq/scaling_max_freq 1224000
+    write /sys/devices/system/cpu/cpu3/cpufreq/scaling_max_freq 1224000
+
     write /sys/block/mmcblk0/queue/scheduler cfq
     write /sys/devices/system/cpu/cpufreq/interactive/boost 0
     exec /system/bin/pm grant net.tonyliu.mi3setting android.permission.ACCESS_FINE_LOCATION
@@ -722,8 +916,11 @@ on post-fs-data
 
 on boot
     setprop service.adb.root 1
-    setprop persist.sys.usb.config adb
-    setprop sys.usb.config adb
+    # pisces: install the default composition before the framework starts.
+    # ffs needs adbd, so the boot composition is what starts it; the framework
+    # replaces the composition later (it reads this property for mAdbEnabled).
+    setprop persist.sys.usb.config mtp,adb
+    setprop sys.usb.config mtp,adb
 
 service usbdebug /system/bin/sh /system/etc/usbdebug.sh
     class core
@@ -735,14 +932,7 @@ service usbdebug /system/bin/sh /system/etc/usbdebug.sh
 on post-fs-data
     start usbdebug
 
-# pisces: the legacy "adb" function is f_adb (waits for /dev/android_adb);
-# Android 9 adbd uses functionfs, so switch the gadget to ffs.
-on property:sys.usb.state=adb
-    write /sys/class/android_usb/android0/enable 0
-    write /sys/class/android_usb/android0/functions ffs
-    write /sys/class/android_usb/android0/enable 1
-
-service usbfix /system/bin/sh /system/etc/usbfix.sh
+service userdirs /system/bin/sh /system/etc/userdirs.sh
     class core
     user root
     group root system
@@ -750,4 +940,19 @@ service usbfix /system/bin/sh /system/etc/usbfix.sh
     disabled
 
 on post-fs-data
-    start usbfix
+    exec /system/bin/sh -c "cat /proc/last_kmsg > /cache/last_kmsg.txt 2>/dev/null"
+    start userdirs
+
+service audience_fw /system/bin/sh /system/bin/load_audience_fw.sh --log
+    class core
+    user root
+    group root system
+    oneshot
+    disabled
+
+service atmel_fw /system/bin/sh /system/bin/atmel_fw_update.sh
+    class core
+    user root
+    group root system
+    oneshot
+    disabled

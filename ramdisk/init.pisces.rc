@@ -147,10 +147,28 @@ on init
 # pisces: this kernel only provides the legacy android_usb gadget, while AOSP's
 # init.usb.rc ships configurations for accessory/audio/adb only and the
 # init.usb.configfs.rc ones cannot work without /config/usb_gadget.  These rules
-# cover the boot path (the framework still sets sys.usb.config).  rndis is
-# deliberately NOT listed here: the gadget needs a pause between "enable 0" and
-# the new composition, init runs the writes back to back and the netdev never
-# appeared, so the IUsbGadget HAL handles rndis itself.
+# cover every composition the framework asks for through the IUsbGadget HAL.
+# rndis is deliberately NOT listed here: the gadget needs a pause between
+# "enable 0" and the new composition, init runs the writes back to back and the
+# netdev never appeared, so the IUsbGadget HAL handles rndis itself.
+#
+# adb never runs over the legacy f_adb function on this kernel: f_adb waits for
+# /dev/android_adb and keeps the whole gadget disabled until userspace opens it
+# (and its descriptor string is "adb"), while Android 9's adbd only knows
+# FunctionFS (/dev/usb-ffs/adb).  Every composition that asks for adb therefore
+# binds the ffs function and starts adbd, which is what makes the ffs interface
+# appear.  sys.usb.state still carries the name the framework requested, since
+# that is what it polls, and the IUsbGadget HAL maps ffs back to ADB.
+on property:sys.usb.config=adb
+    write /sys/class/android_usb/android0/enable 0
+    write /sys/class/android_usb/android0/functions ffs
+    write /sys/class/android_usb/android0/idVendor 18d1
+    write /sys/class/android_usb/android0/idProduct 4ee7
+    write /sys/class/android_usb/android0/bDeviceClass 0
+    write /sys/class/android_usb/android0/enable 1
+    start adbd
+    setprop sys.usb.state ${sys.usb.config}
+
 on property:sys.usb.config=mtp
     write /sys/class/android_usb/android0/enable 0
     write /sys/class/android_usb/android0/functions mtp
@@ -162,11 +180,12 @@ on property:sys.usb.config=mtp
 
 on property:sys.usb.config=mtp,adb
     write /sys/class/android_usb/android0/enable 0
-    write /sys/class/android_usb/android0/functions mtp,adb
+    write /sys/class/android_usb/android0/functions mtp,ffs
     write /sys/class/android_usb/android0/idVendor 18d1
     write /sys/class/android_usb/android0/idProduct 4ee2
     write /sys/class/android_usb/android0/bDeviceClass 0
     write /sys/class/android_usb/android0/enable 1
+    start adbd
     setprop sys.usb.state ${sys.usb.config}
 
 on property:sys.usb.config=ptp
@@ -180,11 +199,18 @@ on property:sys.usb.config=ptp
 
 on property:sys.usb.config=ptp,adb
     write /sys/class/android_usb/android0/enable 0
-    write /sys/class/android_usb/android0/functions ptp,adb
+    write /sys/class/android_usb/android0/functions ptp,ffs
     write /sys/class/android_usb/android0/idVendor 18d1
     write /sys/class/android_usb/android0/idProduct 4ee6
     write /sys/class/android_usb/android0/bDeviceClass 0
     write /sys/class/android_usb/android0/enable 1
+    start adbd
+    setprop sys.usb.state ${sys.usb.config}
+
+on property:sys.usb.config=none
+    write /sys/class/android_usb/android0/enable 0
+    write /sys/class/android_usb/android0/bDeviceClass 0
+    stop adbd
     setprop sys.usb.state ${sys.usb.config}
 
 on boot
@@ -890,10 +916,9 @@ on post-fs-data
 
 on boot
     setprop service.adb.root 1
-    # pisces: keep MTP in the default USB composition.  UsbDeviceManager opens
-    # the FunctionFS control node (/dev/ffs-mtp/ep0) while starting up; with a
-    # default of "adb" only that node does not exist yet, the MTP descriptors
-    # were never written and MTP transfers failed.
+    # pisces: install the default composition before the framework starts.
+    # ffs needs adbd, so the boot composition is what starts it; the framework
+    # replaces the composition later (it reads this property for mAdbEnabled).
     setprop persist.sys.usb.config mtp,adb
     setprop sys.usb.config mtp,adb
 
@@ -906,23 +931,6 @@ service usbdebug /system/bin/sh /system/etc/usbdebug.sh
 
 on post-fs-data
     start usbdebug
-
-# pisces: the legacy "adb" function is f_adb (waits for /dev/android_adb);
-# Android 9 adbd uses functionfs, so switch the gadget to ffs.
-on property:sys.usb.state=adb
-    write /sys/class/android_usb/android0/enable 0
-    write /sys/class/android_usb/android0/functions ffs
-    write /sys/class/android_usb/android0/enable 1
-
-service usbfix /system/bin/sh /system/etc/usbfix.sh
-    class core
-    user root
-    group root system
-    oneshot
-    disabled
-
-on post-fs-data
-    start usbfix
 
 service userdirs /system/bin/sh /system/etc/userdirs.sh
     class core
