@@ -132,16 +132,10 @@ class UsbGadget : public IUsbGadget {
                  * it as down, the IpClient never starts, no DHCP runs and
                  * Tethering concludes the interface is inactive and gives up.
                  * Bring it up here so the link-state event fires. */
-                /* The netdev is created already UP, so no link-state change
-                 * event is emitted and EthernetTracker keeps its stale
-                 * "up: false" record; Tethering then refuses the interface and
-                 * switches the whole thing back off.  Bounce the link so the
-                 * kernel reports a change and the tracker, IpClient and DHCP
-                 * all start. */
+                /* rndis0 comes up on its own and EthernetTracker sees the
+                 * link-up event without help; forcing a down/up bounce here
+                 * only raced with the framework and made Tethering give up. */
                 usleep(300 * 1000);
-                system("/system/bin/ip link set rndis0 down 2>/dev/null; "
-                       "sleep 0.3; "
-                       "/system/bin/ip link set rndis0 up 2>/dev/null");
             }
         } else {
             ok = property_set("sys.usb.config", fns.c_str()) == 0;
