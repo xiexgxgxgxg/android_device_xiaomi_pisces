@@ -78,6 +78,7 @@ struct pisces_stream_out {
     pthread_cond_t cond;
     bool writer_started;
     bool writer_exit;
+    bool idle;
     uint8_t ring[PISCES_RING_BYTES];
     size_t ring_head;
     size_t ring_tail;
@@ -211,10 +212,13 @@ static int out_set_format(struct audio_stream *stream, audio_format_t format) {
 }
 
 static int out_standby(struct audio_stream *stream) {
-    /* Deliberately keeps the PCM open: the writer thread may be inside
-     * pcm_write() here, and closing it underneath caused a SIGSEGV in the
-     * HAL (pcm_get_error(NULL) in the writer's error path). */
-    (void)stream;
+    /* The writer thread does the actual closing once the ring is empty:
+     * closing it here directly raced with pcm_write() and crashed the HAL. */
+    struct pisces_stream_out *out = (struct pisces_stream_out *)stream;
+    pthread_mutex_lock(&out->lock);
+    out->idle = true;
+    pthread_cond_signal(&out->cond);
+    pthread_mutex_unlock(&out->lock);
     return 0;
 }
 
@@ -264,6 +268,15 @@ static void *out_writer_thread(void *arg) {
          * is left after a short wait - a UI sound is often shorter than one
          * 2048 frame period and would otherwise never be played at all. */
         size_t chunk;
+        if (out->idle && out->ring_used == 0) {
+            if (out->pcm != NULL) {
+                pcm_close(out->pcm);
+                out->pcm = NULL;
+                ALOGD("standby: pcm closed");
+            }
+            out->idle = false;
+            continue;
+        }
         if (out->ring_used >= period_bytes) {
             chunk = period_bytes;
         } else if (out->ring_used > 0) {
@@ -368,6 +381,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void *buffer, si
     }
 
     pthread_mutex_lock(&out->lock);
+    out->idle = false;
     const uint8_t *src = buffer;
     size_t left = bytes;
     while (left > 0) {
