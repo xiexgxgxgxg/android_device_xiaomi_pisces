@@ -84,6 +84,7 @@ PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/bin/mount_ext4.sh:system/bin/mount_ext4.sh \
     $(LOCAL_PATH)/bin/fild:system/bin/fild \
     $(LOCAL_PATH)/bin/fdl:system/bin/fdl \
+    $(LOCAL_PATH)/bin/vpcmd:system/bin/vpcmd \
     $(LOCAL_PATH)/default-permissions/pisces-bluetooth.xml:system/etc/default-permissions/pisces-bluetooth.xml
 
 PRODUCT_PACKAGES += \
@@ -130,7 +131,7 @@ PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/audio/nvaudio_conf.xml:system/etc/nvaudio_conf.xml
 
 PRODUCT_PACKAGES += \
-    audio.primary.tegra \
+    audio.primary.pisces \
     audio.a2dp.default \
     audio.usb.default \
     audio.r_submix.default \

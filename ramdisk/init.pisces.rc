@@ -88,7 +88,12 @@ on fs
     chown system system /persist/serialno
     chmod 0400 /persist/serialno
 
-on post-fs-data
+# pisces: the ES325 voice processor sits between the I2S and the CS42L73 and
+# must run its firmware before the codec's DAPM path can power up - without it
+# every es325 i2c write NAKs (-121), the codec stays Off and there is no sound.
+# The audience_fw service (see below) already loads it via vpcmd; do not add a
+# second loader, the two race on the ES325 and both fail.
+
     # pisces: vold does not run yet; userdirs.sh creates the DE/CE dirs.
     mkdir /data/misc/wifi 0770 wifi wifi
     mkdir /data/misc/wifi/sockets 0770 wifi wifi
