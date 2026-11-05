@@ -706,6 +706,14 @@ service nv_power_low /system/bin/power_mode.sh 2
     oneshot
     disabled
 
+# pisces: the ImmVibe vibrator HAL loads libImmVibeJ.so/libpparam.so, which
+# carry text relocations that bionic only loads for API-22 targets.
+service vendor.vibrator-1-0 /vendor/bin/hw/android.hardware.vibrator@1.0-service
+    class hal
+    user system
+    group system
+    setenv LD_PRELOAD /system/lib/libpisces_camshim.so
+
 service immvibed /system/bin/immvibed
     setenv TMPDIR /tmp
     # pisces: libpparam.so (the ImmVibe actuator parameter blob) carries text
