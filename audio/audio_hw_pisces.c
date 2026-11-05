@@ -170,11 +170,14 @@ static void pisces_apply_route(struct pisces_audio_device *adev, bool speaker) {
 /* -------------------------------------------------------------- out stream */
 
 static uint32_t out_get_sample_rate(const struct audio_stream *stream) {
-    return ((const struct pisces_stream_out *)stream)->sample_rate;
+    (void)stream;
+    return PISCES_OUT_RATE;
 }
 
 static int out_set_sample_rate(struct audio_stream *stream, uint32_t rate) {
-    ((struct pisces_stream_out *)stream)->sample_rate = rate;
+    /* fixed rate; AudioFlinger resamples the tracks for us */
+    (void)stream;
+    (void)rate;
     return 0;
 }
 
@@ -253,34 +256,59 @@ static int out_open_pcm(struct pisces_stream_out *out);
 
 static void *out_writer_thread(void *arg) {
     struct pisces_stream_out *out = (struct pisces_stream_out *)arg;
+    const size_t period_bytes = PISCES_PERIOD_SIZE * PISCES_OUT_CHANNELS * sizeof(int16_t);
+    static uint8_t staging[PISCES_PERIOD_SIZE * PISCES_OUT_CHANNELS * sizeof(int16_t)];
 
     pthread_mutex_lock(&out->lock);
     while (!out->writer_exit) {
-        if (out->ring_used == 0) {
+        /* Prefer whole ALSA periods (feeding partial ones made the pacing
+         * irregular and the stream underran on long playback), but flush what
+         * is left after a short wait - a UI sound is often shorter than one
+         * 2048 frame period and would otherwise never be played at all. */
+        size_t chunk;
+        if (out->ring_used >= period_bytes) {
+            chunk = period_bytes;
+        } else if (out->ring_used > 0) {
+            struct timespec ts;
+            clock_gettime(CLOCK_REALTIME, &ts);
+            ts.tv_nsec += 10 * 1000 * 1000;
+            if (ts.tv_nsec >= 1000000000) {
+                ts.tv_sec++;
+                ts.tv_nsec -= 1000000000;
+            }
+            pthread_cond_timedwait(&out->cond, &out->lock, &ts);
+            if (out->ring_used == 0) {
+                continue;
+            }
+            chunk = out->ring_used < period_bytes ? out->ring_used : period_bytes;
+        } else {
             pthread_cond_wait(&out->cond, &out->lock);
             continue;
         }
-        size_t chunk = out->ring_used;
-        size_t head = out->ring_head;
-        pthread_mutex_unlock(&out->lock);
 
-        if (chunk > 4096) {
-            chunk = 4096;
-        }
-        /* contiguous piece first */
+        /* copy the chunk out of the ring (it may wrap) */
+        size_t head = out->ring_head;
         size_t first = PISCES_RING_BYTES - head;
-        if (first > chunk) {
-            first = chunk;
+        if (first > chunk) first = chunk;
+        memcpy(staging, out->ring + head, first);
+        if (first < chunk) {
+            memcpy(staging + first, out->ring, chunk - first);
         }
+        out->ring_head = (head + chunk) % PISCES_RING_BYTES;
+        out->ring_used -= chunk;
+        pthread_mutex_unlock(&out->lock);
 
         if (out->pcm == NULL && out_open_pcm(out) != 0) {
             usleep(5000);
         } else {
-            int ret = pcm_write(out->pcm, out->ring + head, first);
+            static int wr;
+            int ret = pcm_write(out->pcm, staging, chunk);
+            if ((wr++ % 10) == 0) {
+                ALOGD("writer #%d: %zu bytes ret=%d", wr, chunk, ret);
+            }
             if (ret != 0) {
                 const char *err = pcm_get_error(out->pcm);
                 ALOGW("writer: pcm_write %d (%s)", ret, err != NULL ? err : "?");
-                /* underrun: drop the stream state and start again */
                 if (pcm_prepare(out->pcm) != 0) {
                     pcm_close(out->pcm);
                     out->pcm = NULL;
@@ -290,8 +318,6 @@ static void *out_writer_thread(void *arg) {
         }
 
         pthread_mutex_lock(&out->lock);
-        out->ring_head = (out->ring_head + first) % PISCES_RING_BYTES;
-        out->ring_used -= first;
     }
     pthread_mutex_unlock(&out->lock);
     return NULL;
@@ -310,7 +336,13 @@ static int out_open_pcm(struct pisces_stream_out *out) {
         .avail_min = 1,
     };
 
-    out->pcm = pcm_open(PISCES_CARD, PISCES_OUT_DEVICE, PCM_OUT, &config);
+    /* PCM_NORESTART: when the DMA underruns (which happens as soon as the
+     * framework stops feeding us while the PCM stays open) pcm_write() must
+     * return -EPIPE instead of silently writing into a stopped stream; the
+     * writer then re-prepares it.  Without this the stream stayed in XRUN and
+     * every later write went nowhere -> the audio stuttered after a few
+     * seconds. */
+    out->pcm = pcm_open(PISCES_CARD, PISCES_OUT_DEVICE, PCM_OUT | PCM_NORESTART, &config);
     if (out->pcm == NULL || !pcm_is_ready(out->pcm)) {
         ALOGE("cannot open pcm: %s", out->pcm != NULL ? pcm_get_error(out->pcm) : "null");
         if (out->pcm != NULL) {
@@ -332,8 +364,9 @@ static ssize_t out_write(struct audio_stream_out *stream, const void *buffer, si
         }
     }
 
-    if ((g_write_count++ % 50) == 0) {
-        ALOGD("out_write #%d: %zu bytes at %u Hz", g_write_count, bytes, out->sample_rate);
+    if ((g_write_count++ % 10) == 0) {
+        ALOGD("out_write #%d: %zu bytes at %u Hz (ring %zu)",
+              g_write_count, bytes, out->sample_rate, out->ring_used);
     }
 
     pthread_mutex_lock(&out->lock);
@@ -499,7 +532,8 @@ static int adev_open_output_stream(struct audio_hw_device *dev, audio_io_handle_
         return -ENOMEM;
     }
 
-    out->sample_rate = config->sample_rate != 0 ? config->sample_rate : PISCES_OUT_RATE;
+    out->sample_rate = PISCES_OUT_RATE;
+    (void)config;
     out->channel_mask = config->channel_mask != 0 ? config->channel_mask
                                                   : AUDIO_CHANNEL_OUT_STEREO;
     out->format = AUDIO_FORMAT_PCM_16_BIT;
