@@ -48,7 +48,7 @@
 
 #define PISCES_OUT_RATE     44100
 #define PISCES_OUT_CHANNELS 2
-#define PISCES_PERIOD_SIZE  2048
+#define PISCES_PERIOD_SIZE  1024
 #define PISCES_PERIOD_COUNT 4
 
 struct pisces_audio_device {
@@ -82,6 +82,7 @@ struct pisces_stream_out {
     size_t ring_head;
     size_t ring_tail;
     size_t ring_used;
+    uint64_t frames_written;
 };
 
 struct pisces_stream_in {
@@ -237,10 +238,7 @@ static char *out_get_parameters(const struct audio_stream *stream, const char *k
 
 static uint32_t out_get_latency(const struct audio_stream_out *stream) {
     const struct pisces_stream_out *out = (const struct pisces_stream_out *)stream;
-    if (out->pcm == NULL) {
-        return 0;
-    }
-    return (pcm_get_buffer_size(out->pcm) * 1000) / out->sample_rate;
+    return (out->frame_count * 1000) / out->sample_rate;
 }
 
 static int out_set_volume(struct audio_stream_out *stream, float left, float right) {
@@ -330,7 +328,7 @@ static int out_open_pcm(struct pisces_stream_out *out) {
         .period_size = PISCES_PERIOD_SIZE,
         .period_count = PISCES_PERIOD_COUNT,
         .format = PCM_FORMAT_S16_LE,
-        .start_threshold = PISCES_PERIOD_SIZE * 2,
+        .start_threshold = PISCES_PERIOD_SIZE,
         .stop_threshold = PISCES_PERIOD_SIZE * PISCES_PERIOD_COUNT,
         .silence_threshold = 0,
         .avail_min = 1,
@@ -392,14 +390,42 @@ static ssize_t out_write(struct audio_stream_out *stream, const void *buffer, si
         left -= first;
     }
     pthread_cond_signal(&out->cond);
+    out->frames_written += bytes / (PISCES_OUT_CHANNELS * sizeof(int16_t));
     pthread_mutex_unlock(&out->lock);
     return bytes;
 }
 
 static int out_get_render_position(const struct audio_stream_out *stream, uint32_t *dsp_frames) {
-    (void)stream;
-    *dsp_frames = 0;
-    return -EINVAL;
+    struct pisces_stream_out *out = (struct pisces_stream_out *)stream;
+    unsigned int avail = 0;
+    struct timespec ts;
+
+    if (out->pcm == NULL) {
+        return -ENODEV;
+    }
+    if (pcm_get_htimestamp(out->pcm, &avail, &ts) < 0) {
+        return -EINVAL;
+    }
+    *dsp_frames = (uint32_t)(out->frames_written > avail ? out->frames_written - avail : 0);
+    return 0;
+}
+
+/* AudioFlinger paces its writes from this; without it the HAL looks like it
+ * consumes data much faster than the hardware really does and the app writes
+ * at 2x real time. */
+static int out_get_presentation_position(const struct audio_stream_out *stream,
+                                         uint64_t *frames, struct timespec *timestamp) {
+    struct pisces_stream_out *out = (struct pisces_stream_out *)stream;
+    unsigned int avail = 0;
+
+    if (out->pcm == NULL) {
+        return -ENODEV;
+    }
+    if (pcm_get_htimestamp(out->pcm, &avail, timestamp) < 0) {
+        return -EINVAL;
+    }
+    *frames = out->frames_written > avail ? out->frames_written - avail : 0;
+    return 0;
 }
 
 static int out_get_next_write_timestamp(const struct audio_stream_out *stream,
@@ -537,7 +563,7 @@ static int adev_open_output_stream(struct audio_hw_device *dev, audio_io_handle_
     out->channel_mask = config->channel_mask != 0 ? config->channel_mask
                                                   : AUDIO_CHANNEL_OUT_STEREO;
     out->format = AUDIO_FORMAT_PCM_16_BIT;
-    out->frame_count = PISCES_PERIOD_SIZE;
+    out->frame_count = PISCES_PERIOD_SIZE * PISCES_PERIOD_COUNT;
 
     pisces_apply_route(adev, true);
     /* the PCM is opened by the writer thread on the first block: opening it
@@ -559,6 +585,7 @@ static int adev_open_output_stream(struct audio_hw_device *dev, audio_io_handle_
     out->stream.set_volume = out_set_volume;
     out->stream.write = out_write;
     out->stream.get_render_position = out_get_render_position;
+    out->stream.get_presentation_position = out_get_presentation_position;
     out->stream.get_next_write_timestamp = out_get_next_write_timestamp;
     out->adev = adev;
 
