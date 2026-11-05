@@ -386,11 +386,23 @@ static ssize_t out_write(struct audio_stream_out *stream, const void *buffer, si
     size_t left = bytes;
     while (left > 0) {
         if (out->ring_used == PISCES_RING_BYTES) {
-            /* ring full: drop the oldest data rather than blocking */
-            size_t drop = 4096 < out->ring_used ? 4096 : out->ring_used;
-            out->ring_tail = (out->ring_tail + drop) % PISCES_RING_BYTES;
-            out->ring_used -= drop;
-            ALOGW("ring full, dropped %zu bytes", drop);
+            /* Backpressure instead of dropping: the writer drains at the
+             * hardware rate, so waiting here lets the producer's pacing follow
+             * the hardware.  Dropping made the first frames of every short UI
+             * sound disappear (audible as a click/gap). */
+            struct timespec ts;
+            clock_gettime(CLOCK_REALTIME, &ts);
+            ts.tv_nsec += 5 * 1000 * 1000;
+            if (ts.tv_nsec >= 1000000000) {
+                ts.tv_sec++;
+                ts.tv_nsec -= 1000000000;
+            }
+            pthread_cond_timedwait(&out->cond, &out->lock, &ts);
+            if (out->ring_used == PISCES_RING_BYTES) {
+                ALOGW("ring still full, dropping %zu bytes", left);
+                break;
+            }
+            continue;
         }
         size_t tail = out->ring_tail;
         size_t space = PISCES_RING_BYTES - out->ring_used;
