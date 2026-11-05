@@ -421,6 +421,18 @@ static ssize_t out_write(struct audio_stream_out *stream, const void *buffer, si
     return bytes;
 }
 
+/* pcm_get_htimestamp() reports the *free* space in the ALSA buffer, so the
+ * frames that actually reached the codec are
+ *     frames_written - (buffer_size - avail)
+ * Subtracting avail directly (as the first version did) made the reported
+ * position jump around; AudioFlinger then drifted its resampling ratio and
+ * playback speed wandered. */
+static uint64_t out_played_frames(struct pisces_stream_out *out, unsigned int avail) {
+    unsigned int bufsize = pcm_get_buffer_size(out->pcm);
+    uint64_t buffered = (bufsize > avail) ? (uint64_t)(bufsize - avail) : 0;
+    return out->frames_written > buffered ? out->frames_written - buffered : 0;
+}
+
 static int out_get_render_position(const struct audio_stream_out *stream, uint32_t *dsp_frames) {
     struct pisces_stream_out *out = (struct pisces_stream_out *)stream;
     unsigned int avail = 0;
@@ -432,7 +444,7 @@ static int out_get_render_position(const struct audio_stream_out *stream, uint32
     if (pcm_get_htimestamp(out->pcm, &avail, &ts) < 0) {
         return -EINVAL;
     }
-    *dsp_frames = (uint32_t)(out->frames_written > avail ? out->frames_written - avail : 0);
+    *dsp_frames = (uint32_t)out_played_frames(out, avail);
     return 0;
 }
 
@@ -450,7 +462,7 @@ static int out_get_presentation_position(const struct audio_stream_out *stream,
     if (pcm_get_htimestamp(out->pcm, &avail, timestamp) < 0) {
         return -EINVAL;
     }
-    *frames = out->frames_written > avail ? out->frames_written - avail : 0;
+    *frames = out_played_frames(out, avail);
     return 0;
 }
 
