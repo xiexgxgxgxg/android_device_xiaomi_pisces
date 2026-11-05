@@ -353,6 +353,38 @@ wrapper still accepts a legacy `audio_hw_device_t`) that opens the ALSA PCM
 with tinyalsa, programs the ES325 route and the codec's ESL path, and enables
 `spkr_en`.  The nvaudio_conf.xml route tables are the reference.
 
+## Audio (session 5): 90% there, DMA pacing is the last issue
+
+Working now:
+- `audio.primary.pisces` (custom legacy HAL, tinyalsa) is loaded by the
+  framework and the primary output opens.
+- The ES325 firmware is loaded at boot by `audience_fw`/`vpcmd`, without it
+  every es325 i2c write NAKs and the codec DAPM never powers.
+- Speaker output is audible (sound settings, volume UI).
+- The HAL no longer blocks/crashes audioserver: writer thread + ring buffer,
+  lazy PCM open, XRUN recovery, `PCM_NORESTART`, 44.1 kHz everywhere.
+- `AudioResampler` no longer aborts on a float track at a music rate.
+
+Remaining: longer playback (ringtone preview) plays 2-3 s then stutters.
+Measured:
+
+- `i2s1` bit clock during playback is 1411200 Hz (44100*2*16) and `pll_a_out0`
+  is 11289600 - the clock tree is right;
+- a 10 s 44.1 kHz file through tinyplay returns in ~0.95 s while the PCM stays
+  RUNNING, i.e. the DMA accepts data far faster than real time;
+- through the HAL the writer completes ~10 writes of 8192 bytes per second
+  (~92 KB/s) where 44.1 kHz stereo needs 176 KB/s, so the ring overflows and
+  frames are dropped after 2-3 s;
+- a 32-bit file instead blocks for minutes.
+
+So the tegra PCM's period pacing (APB-DMA request sizing / period elapsed) does
+not match the I2S rate.  Leads: `sound/soc/tegra/tegra_pcm.c`
+(`setup_dma_tx_request`, `req->source_bus_width = 32` vs the PCM's 16-bit
+samples, `dma_req[i].size = params_period_bytes`), the AHUB CIF bit-width
+configuration in `tegra30_i2s_hw_params`, and `periods_max = 8` /
+`period_bytes_max = PAGE_SIZE * 2` constraints (our 8192-byte period is exactly
+at the maximum).
+
 ## Next steps
 
 1. WiFi: instrument `libwifi-hal-bcm`'s `wifi_initialize()` /
