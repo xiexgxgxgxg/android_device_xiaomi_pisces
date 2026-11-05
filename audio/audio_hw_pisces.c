@@ -58,7 +58,7 @@ struct pisces_audio_device {
     bool route_speaker;
 };
 
-#define PISCES_RING_BYTES (64 * 1024)
+#define PISCES_RING_BYTES (32 * 1024)
 
 struct pisces_stream_out {
     struct audio_stream_out stream;
@@ -84,6 +84,7 @@ struct pisces_stream_out {
     size_t ring_tail;
     size_t ring_used;
     uint64_t frames_to_pcm;   /* frames actually handed to pcm_write() */
+    uint64_t last_pos;        /* keeps the reported position monotonic */
 };
 
 struct pisces_stream_in {
@@ -272,7 +273,12 @@ static void *out_writer_thread(void *arg) {
             if (out->pcm != NULL) {
                 pcm_close(out->pcm);
                 out->pcm = NULL;
-                ALOGD("standby: pcm closed");
+                /* drop anything still queued: replaying it after the reopen
+                 * sounded like the old audio playing again */
+                out->ring_head = out->ring_tail = out->ring_used = 0;
+                out->frames_to_pcm = 0;
+                out->last_pos = 0;
+                ALOGD("standby: pcm closed, ring reset");
             }
             out->idle = false;
             continue;
@@ -326,6 +332,9 @@ static void *out_writer_thread(void *arg) {
                 if (pcm_prepare(out->pcm) != 0) {
                     pcm_close(out->pcm);
                     out->pcm = NULL;
+                    out->ring_head = out->ring_tail = out->ring_used = 0;
+                    out->frames_to_pcm = 0;
+                    out->last_pos = 0;
                 }
                 usleep(1000);
             }
@@ -436,7 +445,16 @@ static ssize_t out_write(struct audio_stream_out *stream, const void *buffer, si
 static uint64_t out_played_frames(struct pisces_stream_out *out, unsigned int avail) {
     unsigned int bufsize = pcm_get_buffer_size(out->pcm);
     uint64_t buffered = (bufsize > avail) ? (uint64_t)(bufsize - avail) : 0;
-    return out->frames_to_pcm > buffered ? out->frames_to_pcm - buffered : 0;
+    uint64_t pos = out->frames_to_pcm > buffered ? out->frames_to_pcm - buffered : 0;
+
+    /* never report a position that goes backwards: AudioFlinger reacts to that
+     * by re-running its resampler over already played data */
+    if (pos < out->last_pos) {
+        pos = out->last_pos;
+    } else {
+        out->last_pos = pos;
+    }
+    return pos;
 }
 
 static int out_get_render_position(const struct audio_stream_out *stream, uint32_t *dsp_frames) {
