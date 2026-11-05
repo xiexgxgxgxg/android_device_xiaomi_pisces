@@ -708,6 +708,11 @@ service nv_power_low /system/bin/power_mode.sh 2
 
 service immvibed /system/bin/immvibed
     setenv TMPDIR /tmp
+    # pisces: libpparam.so (the ImmVibe actuator parameter blob) carries text
+    # relocations, which bionic refuses to load for a process targeting API 23
+    # or newer; the shim drops the target SDK to 22.  Without it immvibed
+    # cannot initialise and every vibration is dropped with status -4.
+    setenv LD_PRELOAD /system/lib/libpisces_camshim.so
     class late_start
     user system
     group system

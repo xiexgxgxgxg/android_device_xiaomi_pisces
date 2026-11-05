@@ -188,6 +188,8 @@ PRODUCT_PACKAGES += \
 PRODUCT_PACKAGES += \
     immvibed \
     libImmVibeJ \
+    libpparam \
+    immvibed \
     android.hardware.vibrator@1.0-impl \
     android.hardware.vibrator@1.0-service
 
