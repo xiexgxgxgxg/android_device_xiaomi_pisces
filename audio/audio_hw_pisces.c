@@ -83,7 +83,7 @@ struct pisces_stream_out {
     size_t ring_head;
     size_t ring_tail;
     size_t ring_used;
-    uint64_t frames_written;
+    uint64_t frames_to_pcm;   /* frames actually handed to pcm_write() */
 };
 
 struct pisces_stream_in {
@@ -309,6 +309,7 @@ static void *out_writer_thread(void *arg) {
         out->ring_used -= chunk;
         pthread_mutex_unlock(&out->lock);
 
+        int written = 0;
         if (out->pcm == NULL && out_open_pcm(out) != 0) {
             usleep(5000);
         } else {
@@ -317,7 +318,9 @@ static void *out_writer_thread(void *arg) {
             if ((wr++ % 10) == 0) {
                 ALOGD("writer #%d: %zu bytes ret=%d", wr, chunk, ret);
             }
-            if (ret != 0) {
+            if (ret == 0) {
+                written = 1;
+            } else {
                 const char *err = pcm_get_error(out->pcm);
                 ALOGW("writer: pcm_write %d (%s)", ret, err != NULL ? err : "?");
                 if (pcm_prepare(out->pcm) != 0) {
@@ -329,6 +332,9 @@ static void *out_writer_thread(void *arg) {
         }
 
         pthread_mutex_lock(&out->lock);
+        if (written) {
+            out->frames_to_pcm += chunk / (PISCES_OUT_CHANNELS * sizeof(int16_t));
+        }
     }
     pthread_mutex_unlock(&out->lock);
     return NULL;
@@ -416,21 +422,21 @@ static ssize_t out_write(struct audio_stream_out *stream, const void *buffer, si
         left -= first;
     }
     pthread_cond_signal(&out->cond);
-    out->frames_written += bytes / (PISCES_OUT_CHANNELS * sizeof(int16_t));
     pthread_mutex_unlock(&out->lock);
     return bytes;
 }
 
 /* pcm_get_htimestamp() reports the *free* space in the ALSA buffer, so the
  * frames that actually reached the codec are
- *     frames_written - (buffer_size - avail)
- * Subtracting avail directly (as the first version did) made the reported
- * position jump around; AudioFlinger then drifted its resampling ratio and
- * playback speed wandered. */
+ *     frames_to_pcm - (buffer_size - avail)
+ * where frames_to_pcm counts what the writer thread handed to pcm_write().
+ * Counting the frames queued into the ring buffer instead made the reported
+ * position lead the hardware by the ring content, which grew over time and
+ * made AudioFlinger speed the stream up. */
 static uint64_t out_played_frames(struct pisces_stream_out *out, unsigned int avail) {
     unsigned int bufsize = pcm_get_buffer_size(out->pcm);
     uint64_t buffered = (bufsize > avail) ? (uint64_t)(bufsize - avail) : 0;
-    return out->frames_written > buffered ? out->frames_written - buffered : 0;
+    return out->frames_to_pcm > buffered ? out->frames_to_pcm - buffered : 0;
 }
 
 static int out_get_render_position(const struct audio_stream_out *stream, uint32_t *dsp_frames) {
