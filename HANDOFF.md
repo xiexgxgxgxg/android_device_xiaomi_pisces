@@ -497,18 +497,121 @@ quickest way to see the composition without adb; `usbfix.sh` (which rewrote
 `functions ffs` in a loop and fought the framework) has been removed from
 init.pisces.rc.
 
+## Session 8 (night): MTP end-to-end, WiFi hotspot, vibration, screen-on crash
+
+All four were verified on the device (2026-11-06 ~01:00-02:00 host time).
+
+### MTP now transfers files in both directions
+
+Building on the three fixes above, the last blocker was **permissions on the
+storage root**: vold's `VolumeManager::linkPrimary()` runs
+`fs_prepare_dir("/storage/emulated/0", 0755, AID_ROOT, AID_ROOT)` every time
+user 0 starts.  On a normal device that path is a FUSE mount point and the
+chmod is harmless; here it *is* the storage directory (/data/media/0, bind
+mounted), so the storage root was root:root 0755 and MtpServer's SendObject
+died with `Failed to create folder ...: Permission denied` (host saw EIO).
+Changed to 0777 in `system/vold/VolumeManager.cpp`; `init.pisces.rc` also
+re-applies 0777 at `boot_completed` as a safety net and dumps the mode to
+`/cache/storage-mode.txt`.
+
+Verified with the host's gvfs mount: `cp` 80 KB host->phone and 297 KB
+phone->host, md5 identical both ways.
+
+### WiFi hotspot works
+
+Two independent blockers:
+
+1. The wifi HAL ran as `wifi`; starting SoftAP makes it reconfigure the chip
+   (mode 0 -> mode 1) and bring wlan0 up itself, which needs CAP_NET_ADMIN.
+   3.4 has no ambient capabilities, so the vendor rc's
+   `capabilities NET_ADMIN ...` is dropped by init:
+   `Could not set interface flags for wlan0 (Permission denied)` ->
+   `Failed to start legacy HAL` -> `configureChip error: 9`.
+   init.pisces.rc now overrides the service with `user root`.
+2. Android 9's netd installs every ip rule with a `FRA_UID_RANGE` attribute
+   (modern uapi value 20).  The 3.4 kernel's FRA enum ended at
+   `FRA_OIFNAME` (17), so `nlmsg_parse()` rejected the whole RTM_NEWRULE with
+   -EINVAL: `Error adding IPv4 rule: Invalid argument` ->
+   `addInterfaceToNetwork() failed` -> tethering reported
+   IFACE_IP_MODE_CONFIGURATION_ERROR and `WifiServiceImpl` stopped the AP
+   ("no LOHS requests, stop softap") - the 1-2 second on/off.
+   Backported the attribute in `include/linux/fib_rules.h`,
+   `include/net/fib_rules.h` and `net/core/fib_rules.c`: it is accepted,
+   stored and dumped, but not matched (3.4 has no socket uid in the flow).
+   The root-only rule that netd builds with uid 0..0 behaves exactly like the
+   modern kernel there anyway.
+
+Verified: `iw dev wlan0 info` = type AP, `192.168.43.242/24`, hostapd up,
+`dumpsys connectivity` = `wlan0 - TetheredState`, dnsmasq listening on
+0.0.0.0:67 and the AP address:53, stable for 2+ minutes.  (No upstream: the
+modem is not working, so clients get an IP but no internet.)
+
+### Vibration works
+
+The Immersion stack cannot initialise on this kernel:
+`VibeDriverInitialize: Insufficient kernel parameters` / `status=-4` (libpparam
+and the kernel driver disagree about the parameter set).  The kernel side is
+fine: `/dev/tspdrv` reports `DRV2604 Rev:1 v5.0.36.6` and Xiaomi added a
+timed_output interface.  The HAL (`hardware/nvidia/pisces/vibrator`) now
+writes the timeout to `/sys/class/timed_output/vibrator/enable` exactly like
+AOSP's default HAL, so no ImmVibe is involved.  `vibrator.pisces` had been
+dropped from PRODUCT_PACKAGES at some point and the image still carried a
+stale ImmVibe .so - it is back in PRODUCT_PACKAGES now.
+
+Verified: writing 5000 shows the driver countdown (4985 -> 4454 -> ...),
+`cmd vibrator vibrate 200` reaches VibratorService without errors.
+
+### Screen-on system_server crash (this was killing the hotspot)
+
+The device overlay forced `config_animateScreenLights=true`.  The color fade
+takes a screenshot into a SurfaceTexture, the capture fails on this gralloc
+(`RuntimeException: Error during updateTexImage` inside system_server) and the
+whole system restarts on the first screen-on - which also tore down the
+hotspot.  The overlay now keeps AOSP's default (false).  Three off/on cycles
+in a row no longer crash.
+
+### Camera: state after tonight
+
+- The AVP idea is a dead end and was based on a misreading: stock is
+  `CONFIG_TEGRA_AVP=n / TEGRA_MEDIASERVER=n / TEGRA_NVAVP=y`, and this kernel
+  is the same.  `/dev/tegra_avpchannel` exists, nvavp allocated IOVM at
+  0x0ff00000, and TRPC registered only `local`.  The `avp-remote` node would
+  need `avp.c` plus the `nvrm_avp_*` firmware, which the device does not have
+  (`/etc/firmware` has only `nvavp_os_0ff00000.bin` and the aud/vid ucodes).
+- `tegra_v4l2_camera.c` (the only driver in this tree that would create
+  /dev/video*) does **not compile** for T114: it is the Tegra 2/3 nvhost API
+  (`struct nvhost_device` is an incomplete type on this kernel).  Enabling
+  `CONFIG_VIDEO_TEGRA` (which needs `SOC_CAMERA`) breaks the build.
+- What happens now: the wrapper enumerates 2 cameras, `NvCameraHal::
+  setupHalInLock` fails with NvError 0x3 after ~5 s, `NvCameraHal:300`
+  propagates it, and cameraserver's enumeration (it opens camera 0 to look
+  for a flash unit) times out the same way.  strace of the provider shows
+  `/dev/video0` and `/dev/video1` (ENOENT) and then /etc/nvcamera.conf; the
+  5 s wait is inside the NvMM block container setup, not in a traced syscall.
+
+Next camera experiments, in order: (1) strace with timestamps to find the
+exact 5 s window and which fd/thread blocks; (2) check whether libnvmm's
+blocks are supposed to be loaded into the AVP by nvavp (the OS image may lack
+the camera block service), (3) port `tegra_v4l2_camera.c` to T114 as the
+fallback path if NVMM cannot be made to work.
+
 ## Next steps
 
-1. WiFi: instrument `libwifi-hal-bcm`'s `wifi_initialize()` /
-   `WifiLegacyHal::start()` to find why the chip configuration returns
-   ERROR_UNKNOWN.
-2. Camera: NvError 0x3 from `setupHalInLock`; also make the provider dump a
-   tombstone instead of crashing the destructor.
+1. Camera (the only big open item): find the 5 s wait inside
+   `NvCameraHal::setupHalInLock` (timestamped strace of the provider, then
+   check whether the AVP OS image carries the camera block service).  See the
+   session-8 notes for the experiments.
+2. WiFi STA: never actually connected to an AP - try it now that netd can
+   install rules (the same FRA_UID_RANGE fix was blocking the STA network
+   setup).
 3. Sensors HAL (there is none, which is why the camera wrapper had to skip the
    sensorservice wait).
 4. Baseband/RIL: `ril-daemon` and `gps-daemon` start and exit; `ro.boot.modem=sprd`
    and `libril-xiaomi-sprd.so` exist.
 5. Gate the nvmap debug prints.
+6. The GPS daemon (`glgps_nvidiaTegra2android`) still fails to link against
+   `SensorManager::sInstance` - it needs the same shim treatment as the camera
+   if GPS is wanted.
 
 ## Repo commits (latest)
 

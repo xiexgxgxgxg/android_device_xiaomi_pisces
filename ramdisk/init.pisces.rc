@@ -227,6 +227,11 @@ on boot
     chmod 0777 /data/media/0
     mkdir /storage/emulated/0/bluetooth 0777 media_rw media_rw
     chmod 0777 /storage/emulated/0/bluetooth
+    # pisces: something recreates /data/media/0 with root:root 0755 after this
+    # point (MtpServer then fails every SendObject with EACCES on the storage
+    # root), so record the mode and re-apply it once the framework is up.
+    exec /system/bin/sh -c "echo boot /data/media/0=$(stat -c '%a %U:%G' /data/media/0) >> /cache/storage-mode.txt"
+    exec /system/bin/sh -c "echo boot /storage/emulated/0=$(stat -c '%a %U:%G' /storage/emulated/0) >> /cache/storage-mode.txt"
 
     # pisces: cap all cores and dim the panel during boot
     write /sys/devices/system/cpu/cpu1/cpufreq/scaling_max_freq 510000
@@ -682,10 +687,18 @@ service ril-daemon /vendor/bin/hw/rild
 # without the inet group, and this kernel (3.4) has no ambient capabilities so
 # the rc "capabilities" line cannot be used at all.  This definition is parsed
 # before /vendor/etc/init, so it wins over the stock one.
+#
+# It has to run as root: starting SoftAP makes the HAL reconfigure the chip
+# from mode 0 (STA) to mode 1 (AP) and bring wlan0 up itself, which needs
+# CAP_NET_ADMIN.  As plain "wifi" that failed with
+#   "Could not set interface flags for wlan0 (Permission denied)"
+#   "Failed to start legacy HAL: UNKNOWN"
+#   "executeChipReconfiguration: configureChip error: 9"
+# and the hotspot switched itself off ~1 s after it was enabled.
 service vendor.wifi_hal_legacy /vendor/bin/hw/android.hardware.wifi@1.0-service
     class hal
-    user wifi
-    group wifi gps inet
+    user root
+    group root wifi gps inet
 
 # pisces: Android 9 uses the HIDL supplicant (/vendor/bin/hw/wpa_supplicant),
 # started lazily by hwservicemanager through these interface declarations; the
@@ -910,6 +923,17 @@ on property:init.svc.logd=running
 
 on property:sys.boot_completed=1
     stop kmsglog
+
+# pisces: vold / the framework recreate /data/media/0 (root:root 0755) after
+# "on boot", which is exactly the storage root MtpServer writes into - every
+# host->phone transfer then failed with "Failed to create folder ...: Permission
+# denied" / SendObjectInfo GENERAL_ERROR.  Re-apply the wide mode once the
+# framework has settled; /storage/emulated/0 is the same inode, so one chmod
+# covers both names.
+on property:sys.boot_completed=1
+    chmod 0777 /data/media/0
+    chmod 0777 /storage/emulated/0
+    exec /system/bin/sh -c "echo boot_completed /data/media/0=$(stat -c '%a %U:%G' /data/media/0) >> /cache/storage-mode.txt"
 
 on post-fs-data
     setprop vold.decrypt trigger_restart_framework
