@@ -385,6 +385,40 @@ configuration in `tegra30_i2s_hw_params`, and `periods_max = 8` /
 `period_bytes_max = PAGE_SIZE * 2` constraints (our 8192-byte period is exactly
 at the maximum).
 
+
+## USB tethering (session 6): the phone side works, the Settings switch does not
+
+Verified working chain (log evidence):
+- `IUsbGadget` HAL (`hardware/nvidia/pisces/usbgadget/`) maps the HAL function
+  bits to the legacy android_usb sysfs; it must return `Status::SUCCESS`, not
+  `FUNCTIONS_APPLIED`, or UsbDeviceManager logs "Setting default fuctions" and
+  reverts immediately.
+- adb and rndis cannot be composed on this kernel: with "adb,rndis" or
+  "rndis,adb" `rndis0` is never created (tested both orders, dump in
+  /data/local/tmp/combo.log).  The HAL therefore drops adb when rndis is
+  requested, and adb returns when tethering stops.
+- `config_ethernet_iface_regex` must be `(eth|rndis|usb)\\d` in the overlay XML -
+  a single backslash is eaten by aapt and becomes a plain "d".
+- `UsbHandlerHal` used to read /sys/class/android_usb/android0/state only in its
+  constructor, so mConnected stayed false: every USB_STATE broadcast said
+  "not connected", the USB preferences page stayed disabled and Tethering took
+  the !usbConnected branch and actively UNtethered rndis0.  It now refreshes the
+  state after each function switch; dumpsys usb shows connected=true.
+- Tethering.java now drives the USB state from the rndis flag instead of
+  usbConnected/usbConfigured (those do not settle on the legacy gadget).
+
+Result: `rndis0` gets 192.168.42.129/24, its route is installed and it becomes
+the default network (ConnectivityService "Switching to new default network").
+The host sees a usbteth interface but needs to run a DHCP client on it.
+
+Still broken:
+- the Settings "USB tethering" switch flips back immediately.  It is driven by
+  TetherSettings.updateUsbState() -> mCm.getTetheredIfaces() plus mUsbConnected,
+  so the framework's tethered list or the connected flag is still not what the
+  UI expects at that moment,
+- the USB preferences page stays greyed for the same family of reasons
+  (UsbBackend.getDataRole() / the UsbPortManager port).
+
 ## Next steps
 
 1. WiFi: instrument `libwifi-hal-bcm`'s `wifi_initialize()` /
