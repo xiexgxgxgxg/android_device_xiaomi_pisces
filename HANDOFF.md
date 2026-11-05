@@ -442,6 +442,30 @@ Still broken:
 Debug logging still in place (search for TetherDbg / UsbPrefDbg) - remove before
 shipping.
 
+
+### MTP: where it stands
+
+Boot composition is now mtp,adb (init.pisces.rc on boot + the HAL keeps mtp in
+every adb-only composition so /dev/ffs-mtp/ep0 exists when UsbDeviceManager
+opens its control node).  The leftover NVIDIA usb rules
+(init.nv_dev_board.usb.rc, which composed mtp,mass_storage,adb with a factory
+cdrom ISO and Xiaomi PIDs) are disabled - they were racing with ours and the
+phone enumerated as 2717:0368 with no adb.
+
+Still open: with the phone unlocked, picking "File transfer" in the USB
+preferences does not stick and the host never shows the storage.  Next things to
+check, in order:
+1. `ls /dev/ffs-mtp/` after selecting MTP - if the node is missing the mtp
+   function is not binding (same class of problem as adb+rndis),
+2. `sys.usb.state` after the switch,
+3. logcat for "no ffs control for mtp" (our fallback) and for MtpService,
+4. whether the framework reverts because USB_DATA_UNLOCKED is false.
+
+Note the debugging loop is painful here: every USB switch drops adb, so use the
+detached-script + /data file trick that worked for rndis:
+  setsid sh -c '<switch commands>; ip link > /data/local/tmp/x.log' &
+then replug and read the file.
+
 ## Next steps
 
 1. WiFi: instrument `libwifi-hal-bcm`'s `wifi_initialize()` /
