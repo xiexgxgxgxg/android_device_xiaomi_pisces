@@ -499,7 +499,16 @@ init.pisces.rc.
 
 ## Session 8 (night): MTP end-to-end, WiFi hotspot, vibration, screen-on crash
 
-All four were verified on the device (2026-11-06 ~01:00-02:00 host time).
+All four were verified on the device (2026-11-06 ~01:00-02:30 host time).
+Final image: `lineage_pisces-ota-eng.xie.zip` built 02:21, flashed and
+re-verified: MTP write+read (md5 match both ways), hotspot in TetheredState
+for 75 s+, vibration countdown, no system_server crash on screen on/off.
+The hotspot was left running so it can be checked by hand.
+
+Things to look at in the morning: plug the phone into a PC and copy a file
+both ways; toggle the hotspot from Settings and connect a laptop to it
+(it has no internet upstream because the modem/RIL is still broken); feel the
+vibration when tapping the keyboard.
 
 ### MTP now transfers files in both directions
 
@@ -587,13 +596,38 @@ in a row no longer crash.
   propagates it, and cameraserver's enumeration (it opens camera 0 to look
   for a flash unit) times out the same way.  strace of the provider shows
   `/dev/video0` and `/dev/video1` (ENOENT) and then /etc/nvcamera.conf; the
-  5 s wait is inside the NvMM block container setup, not in a traced syscall.
+  blocking ioctl is `_IOC(WRITE, 'r', 0x30, 4)` = TEGRA_SEMA_IOCTL_WAIT on
+  `/dev/tegra_sema`.
 
-Next camera experiments, in order: (1) strace with timestamps to find the
-exact 5 s window and which fd/thread blocks; (2) check whether libnvmm's
-blocks are supposed to be loaded into the AVP by nvavp (the OS image may lack
-the camera block service), (3) port `tegra_v4l2_camera.c` to T114 as the
-fallback path if NVMM cannot be made to work.
+**Missing process groups (found tonight).**  The provider runs as
+`user cameraserver`, `group audio camera input drmrpc wakelock`, but it also
+needs:
+  - `/dev/tegra_sema`, `/dev/tegra_rpc`, `/dev/tegra_avpchannel` - media:media
+  - `/dev/knvmap` - system:system
+  (`/dev/imx135`, `/dev/nvhost-vi`, `/dev/nvhost-isp` are media:camera, which
+  the stock list already covers.)  Adding `media system` to the service makes
+  the HAL get **much** further: the sensor powers up
+  (`NvOdmImagerSetPowerLevel Level:3`), `ApplyChangedSettings()` runs, and the
+  open takes ~1.8 s instead of failing at 5 s.  But then the NvMM block RPC
+  **deadlocks**: 13 threads sit in tegra_sema_wait forever and the open never
+  returns, wedging cameraserver and making every app that touches the camera
+  hang.  That is why the group list is left at the stock value for now - a
+  clean 0x3 after 5 s is better than a hung camera service.  The comment in
+  `init.pisces.rc` records this.
+
+- `/sys/kernel/debug/tegra_rpc/ports` shows two ports with both peers `local`
+  and `ready: yes`, so the CPU-side TRPC pairing is fine; what never comes
+  back is the block completion (the AVP side).  nvavp loads
+  `nvavp_os_0ff00000.bin` and `nvavp_vid_ucode_alt.bin` (`nvavp_vid_ucode.bin`
+  is absent, harmless); there is no separate nvmm daemon in the image, the
+  blocks run inside the provider process.
+
+Next camera experiments, in order: (1) understand why the block RPC never
+completes on the AVP side (the deadlock above) - the group fix must come back
+together with it; (2) check whether libnvmm expects an AVP-side block service
+that `nvavp_os_0ff00000.bin` does not carry; (3) port `tegra_v4l2_camera.c`
+to T114 (it is the Tegra 2/3 nvhost API and does not compile) as the fallback
+capture path.
 
 ## Next steps
 

@@ -719,6 +719,14 @@ service wpa_supplicant /vendor/bin/hw/wpa_supplicant \
 # 22).  LD_PRELOAD is the only way to get them into the vendor module's linker
 # namespace.  This definition is parsed before /vendor/etc/init/..., so init
 # ignores the stock one.
+# pisces: the 2013 camera HAL also wants /dev/tegra_sema, /dev/tegra_rpc and
+# /dev/tegra_avpchannel (media:media) plus /dev/knvmap (system:system).  Adding
+# "media system" here does get much further - the sensor powers up and
+# NvCameraHal::ApplyChangedSettings() runs - but the NvMM block RPC then
+# deadlocks in tegra_sema_wait (13 threads never wake) and the open never
+# returns, which wedges cameraserver and makes every app that touches the
+# camera hang.  Keeping the stock group list keeps the failure at the clean
+# NvError 0x3 after 5 s until the block/AVP deadlock is understood.
 service vendor.camera-provider-2-4 /vendor/bin/hw/android.hardware.camera.provider@2.4-service
     class hal
     user cameraserver
