@@ -141,6 +141,14 @@ on boot
     # pisces: /storage/emulated here is the raw UDA mount, owned by root, so
     # com.android.bluetooth cannot create its receive directory and OBEX aborts
     # with "can't create base directory /storage/emulated/0/bluetooth".
+    # There is no sdcardfs/FUSE daemon here: /storage/emulated is a plain
+    # directory owned by media_rw 0770 and /storage/emulated/0 is a bind of
+    # /data/media/0 owned by root 0755, so apps (e.g. com.android.bluetooth,
+    # which only has the read-only sdcard_r group) cannot even traverse it and
+    # OBEX aborts with "can't create base directory".  Widen both until the
+    # proper per-app view exists.
+    chmod 0771 /storage/emulated
+    chmod 0777 /data/media/0
     mkdir /storage/emulated/0/bluetooth 0777 media_rw media_rw
     chmod 0777 /storage/emulated/0/bluetooth
 
