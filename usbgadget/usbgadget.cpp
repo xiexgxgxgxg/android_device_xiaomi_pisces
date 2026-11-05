@@ -138,6 +138,16 @@ class UsbGadget : public IUsbGadget {
                 usleep(300 * 1000);
             }
         } else {
+            /* Keep MTP in every composition that has adb.  UsbDeviceManager
+             * opens the FunctionFS control node (/dev/ffs-mtp/ep0) once while
+             * starting up; if the gadget drops back to adb-only that node
+             * disappears and every later MTP transfer fails.  Writing
+             * "mtp,adb" keeps the node around without changing what the
+             * framework believes it requested. */
+            if ((functions & GadgetFunction::ADB)
+                    && !(functions & (GadgetFunction::MTP | GadgetFunction::PTP))) {
+                fns = "mtp,adb";
+            }
             ok = property_set("sys.usb.config", fns.c_str()) == 0;
             if (ok) {
                 for (int i = 0; i < 20; i++) {
