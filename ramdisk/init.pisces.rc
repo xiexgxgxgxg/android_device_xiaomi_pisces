@@ -890,8 +890,12 @@ on post-fs-data
 
 on boot
     setprop service.adb.root 1
-    setprop persist.sys.usb.config adb
-    setprop sys.usb.config adb
+    # pisces: keep MTP in the default USB composition.  UsbDeviceManager opens
+    # the FunctionFS control node (/dev/ffs-mtp/ep0) while starting up; with a
+    # default of "adb" only that node does not exist yet, the MTP descriptors
+    # were never written and MTP transfers failed.
+    setprop persist.sys.usb.config mtp,adb
+    setprop sys.usb.config mtp,adb
 
 service usbdebug /system/bin/sh /system/etc/usbdebug.sh
     class core

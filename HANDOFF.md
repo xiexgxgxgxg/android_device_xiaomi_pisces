@@ -419,6 +419,29 @@ Still broken:
 - the USB preferences page stays greyed for the same family of reasons
   (UsbBackend.getDataRole() / the UsbPortManager port).
 
+
+## USB preferences / MTP (session 6, end state)
+
+- USB preferences page: fixed. UsbBackend.updatePorts() only accepted a port
+  whose UsbPortStatus.isConnected() was true; on this legacy gadget the port
+  reports currentMode=MODE_NONE while dataRole=DEVICE, so the page stayed
+  disabled. updatePorts() now also accepts a port whose current data role is
+  DEVICE. Verified: "UsbPrefDbg: connected=true powerRole=2 dataRole=2".
+- MTP: the AOSP path opens the FunctionFS control node /dev/ffs-mtp/ep0 while
+  UsbDeviceManager starts; with the default composition being "adb" that node
+  does not exist, nativeOpenControl() falls back to /dev/null and the MTP
+  descriptors are written into the void. persist.sys.usb.config is now set to
+  "mtp,adb" from init.pisces.rc's on boot (the old debugging block that forced
+  "adb" has been replaced) so the ffs nodes exist from the start.
+  Still to verify: sys.usb.config comes out as "adb" because the framework
+  applies its own default after init; the ffs-mtp node therefore still does not
+  appear. Next step is UsbHandlerHal/HAL side: enable the mtp function as part
+  of the boot composition (or make nativeOpenControl retry once the function is
+  enabled instead of falling back to /dev/null).
+
+Debug logging still in place (search for TetherDbg / UsbPrefDbg) - remove before
+shipping.
+
 ## Next steps
 
 1. WiFi: instrument `libwifi-hal-bcm`'s `wifi_initialize()` /
