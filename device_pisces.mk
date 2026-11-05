@@ -188,7 +188,8 @@ PRODUCT_PACKAGES += \
 PRODUCT_PACKAGES += \
     immvibed \
     libImmVibeJ \
-    vibrator.pisces
+    android.hardware.vibrator@1.0-impl \
+    android.hardware.vibrator@1.0-service
 
 # Vendor Apps
 PRODUCT_PACKAGES += \
