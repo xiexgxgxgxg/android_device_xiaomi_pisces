@@ -191,6 +191,7 @@ PRODUCT_PACKAGES += \
     libImmVibeJ \
     libpparam \
     immvibed \
+    android.hardware.usb.gadget@1.0-service.pisces \
     android.hardware.light@2.0-impl \
     android.hardware.light@2.0-service \
     android.hardware.vibrator@1.0-impl \
