@@ -143,10 +143,14 @@ on init
     setprop persist.pisces.bt.skip_fw 1
 
 
+
 # pisces: this kernel only provides the legacy android_usb gadget, while AOSP's
 # init.usb.rc ships configurations for accessory/audio/adb only and the
-# init.usb.configfs.rc ones cannot work without /config/usb_gadget.  Without
-# these rules "sys.usb.config=rndis" (USB tethering) and mtp/ptp did nothing.
+# init.usb.configfs.rc ones cannot work without /config/usb_gadget.  These rules
+# cover the boot path (the framework still sets sys.usb.config).  rndis is
+# deliberately NOT listed here: the gadget needs a pause between "enable 0" and
+# the new composition, init runs the writes back to back and the netdev never
+# appeared, so the IUsbGadget HAL handles rndis itself.
 on property:sys.usb.config=mtp
     write /sys/class/android_usb/android0/enable 0
     write /sys/class/android_usb/android0/functions mtp
@@ -179,24 +183,6 @@ on property:sys.usb.config=ptp,adb
     write /sys/class/android_usb/android0/functions ptp,adb
     write /sys/class/android_usb/android0/idVendor 18d1
     write /sys/class/android_usb/android0/idProduct 4ee6
-    write /sys/class/android_usb/android0/bDeviceClass 0
-    write /sys/class/android_usb/android0/enable 1
-    setprop sys.usb.state ${sys.usb.config}
-
-on property:sys.usb.config=rndis
-    write /sys/class/android_usb/android0/enable 0
-    write /sys/class/android_usb/android0/functions rndis
-    write /sys/class/android_usb/android0/idVendor 18d1
-    write /sys/class/android_usb/android0/idProduct 4ee3
-    write /sys/class/android_usb/android0/bDeviceClass 0
-    write /sys/class/android_usb/android0/enable 1
-    setprop sys.usb.state ${sys.usb.config}
-
-on property:sys.usb.config=rndis,adb
-    write /sys/class/android_usb/android0/enable 0
-    write /sys/class/android_usb/android0/functions rndis,adb
-    write /sys/class/android_usb/android0/idVendor 18d1
-    write /sys/class/android_usb/android0/idProduct 4ee4
     write /sys/class/android_usb/android0/bDeviceClass 0
     write /sys/class/android_usb/android0/enable 1
     setprop sys.usb.state ${sys.usb.config}

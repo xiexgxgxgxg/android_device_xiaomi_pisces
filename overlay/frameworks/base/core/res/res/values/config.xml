@@ -60,6 +60,11 @@
     <!-- List of regexpressions describing the interface (if any) that represent tetherable
          USB interfaces.  If the device doesn't want to support tething over USB this should
          be empty.  An example would be "usb.*" -->
+    <!-- pisces: the legacy android_usb RNDIS function creates "rndis0", while
+         AOSP's default regex only accepts "eth\d", so EthernetTracker ignored
+         the USB tethering interface and Tethering could never start on it. -->
+    <string translatable="false" name="config_ethernet_iface_regex">(eth|rndis|usb)\\d</string>
+
     <string-array translatable="false" name="config_tether_usb_regexs">
         <item>"usb\\d"</item>
         <item>"rndis\\d"</item>
