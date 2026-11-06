@@ -739,12 +739,31 @@ service wpa_supplicant /vendor/bin/hw/wpa_supplicant \
 #  * Keeping the stock group list makes the open fail cleanly with
 #    NvError 0x3 after 5 s instead of wedging cameraserver, so every app that
 #    touches the camera still gets an error rather than a hang.
+# pisces: the 2013 Tegra camera HAL can serve only one sensor per process (the
+# second sensor opens but its CSI never delivers frames), so run one provider
+# per sensor and let the camera service switch providers instead.  The rear
+# provider keeps the historic service name and exposes camera id 0, the front
+# provider exposes camera id 1.
 service vendor.camera-provider-2-4 /vendor/bin/hw/android.hardware.camera.provider@2.4-service
     class hal
     user media
     group audio camera system inet drmrpc mediadrm radio
     ioprio rt 4
     setenv LD_PRELOAD /system/lib/libpisces_camshim.so
+    setenv PISCES_CAM_ROLE rear
+    setenv PISCES_PROVIDER_INSTANCE legacy/0
+    setenv PISCES_CAM_ID_BASE 0
+    writepid /dev/cpuset/camera-daemon/tasks /dev/stune/top-app/tasks
+
+service vendor.camera-provider-2-4-front /vendor/bin/hw/android.hardware.camera.provider@2.4-service
+    class hal
+    user media
+    group audio camera system inet drmrpc mediadrm radio
+    ioprio rt 4
+    setenv LD_PRELOAD /system/lib/libpisces_camshim.so
+    setenv PISCES_CAM_ROLE front
+    setenv PISCES_PROVIDER_INSTANCE legacy/1
+    setenv PISCES_CAM_ID_BASE 1
     writepid /dev/cpuset/camera-daemon/tasks /dev/stune/top-app/tasks
 
 on charger
