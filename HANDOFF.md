@@ -951,6 +951,32 @@ the CSI never raises sync point 15, the HAL waits 5.2 s, then
 incremented to 621 (threshold 621)") - which is the green frame the user sees -
 and Snap's own 5 s preview timeout aborts the session.
 
+## Session 19: register-level view
+
+camshim now also intercepts `NvRmHostModuleRegWr/RegRd` (libnvrm_graphics.so),
+i.e. every host1x register access the blob makes (tags `NvRmReg`, module 11 =
+VI, module 12 = ISP).  Measured with identical capture windows:
+
+| session | register writes |
+|---|---|
+| front as first session | 91 writes, all `mod=11 off=0x5c8 val=0` (a ~50 ms handshake/keepalive) |
+| rear->front switch | 26 writes: 14x the same VI 0x5c8 plus 12 writes to ISP 0x928/0x930/0x938/0x894/0x89c |
+
+Consequences for the next attempt:
+
+1. The sensor-specific VI/CSI programming is **not** done through the direct
+   register accessors - the only VI register touched in a working session is
+   the 0x5c8 handshake.  It must go through the VI channel's command buffer
+   (submitted to the hardware), so the next instrumentation point is the
+   nvhost channel submission (kernel side, `nvhost_cdma` / the job submit
+   ioctl) or `NvRmChannelOpen`/the channel mmap.
+2. The ISP registers written during a switch (0x928/0x930/0x938) are the ones
+   to look at first: they are the ISP stream enable path, and a working
+   first-session front preview never touches them.
+
+The blob's FM guard (0x380e8) and the FixFence fake-increment path (0x52594)
+are documented above; both are now fully understood.
+
 ## Next steps
 
 1. Camera: flash the build with the provider-restart + openSession retry and
