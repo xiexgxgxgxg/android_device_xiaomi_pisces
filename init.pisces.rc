@@ -735,6 +735,9 @@ on boot
 # BT config files.
 on post-fs-data
     mkdir /data/misc/bluetooth 0770 bluetooth bluetooth
+    # pisces: the camera wrapper (provider, uid media) caches per-sensor
+    # parameter blobs here and cameraserver reads them back
+    mkdir /data/misc/pisces_camera 0770 media cameraserver
     copy /system/etc/bluetooth/bdaddr /data/misc/bluetooth/bdaddr
     chown bluetooth bluetooth /data/misc/bluetooth/bdaddr
     chmod 0660 /data/misc/bluetooth/bdaddr

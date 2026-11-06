@@ -713,7 +713,12 @@ String8 CameraClient::getParameters() const {
          * "getParameters failed (empty parameters)" right after a rear<->front
          * switch; hand back the cached parameter blob instead.
          */
-        FILE *f = fopen("/data/misc/cameraserver/pisces_shim_params.txt", "re");
+        char shimPath[128];
+        snprintf(shimPath, sizeof(shimPath), "/data/misc/pisces_camera/params_%d.txt", mCameraId);
+        FILE *f = fopen(shimPath, "re");
+        if (f == NULL) {
+            f = fopen("/data/misc/pisces_camera/params_0.txt", "re");
+        }
         if (f != NULL) {
             char buf[4096];
             size_t n = fread(buf, 1, sizeof(buf) - 1, f);

@@ -750,6 +750,71 @@ chain:
     headphone mixer route (Int Spk Switch 0, Headphone Switch 1, Headphone
     Analog Playback Volume 63/63).
 
+## Session 13: front camera after a rear session
+
+The front sensor (IMX132) works when it is the *first* session of a provider
+process: it streams and takes 1080x1920 photos.  After a rear (IMX135) session
+the same sensor is opened successfully - `imx132_set_mode ... stream on.` is
+visible in dmesg - but the VI/CSI never delivers frames: `Camera Timeout: Sync
+Point ID: 15` (csi_vi_0), `AlterSyncPointStatus failed`, black preview, then
+uninitialised (green) buffers and a Snap crash.  The HAL's VI/CSI routing for
+the previous sensor is not reprogrammed, and unloading the vendor module in
+process does not help (the linker keeps it mapped).
+
+Current approach: the camera wrapper kills the provider right after every
+camera close (`fork()` + `sh -c "sleep 0.15; kill -9 $PPID"`; init restarts the
+service automatically) and `CameraProviderManager::openSession()` retries the
+open for ~4 s while the fresh provider registers.  A switch therefore costs
+one or two seconds but the front sensor gets the same "first session" state in
+which it does stream.  `CameraClient::getParameters()` falls back to
+`/data/misc/cameraserver/pisces_shim_params.txt` while the client has no
+hardware, which avoids the "getParameters failed (empty parameters)" crash
+that the restart used to cause.
+
+## Session 14: where the rear/front switch stands
+
+What is verified working on the device (2026-11-06):
+
+- rear camera (IMX135): preview, autofocus, still capture (13 MP JPEG);
+- front camera (IMX132): opens, streams and captures (1080x1920 JPEG) when it
+  is the first camera session of a provider process;
+- torch/flashlight (LED sysfs), wired headset audio + jack detection;
+- MTP both directions, WiFi hotspot, vibration, screen on/off.
+
+The rear<->front switch is the last open item.  Everything up to the frame
+delivery works:
+
+  Closing camera 0 -> provider restart -> camera service retries the open ->
+  Opening camera 1 -> IMX132 set_mode + "[imx132]: stream on." in dmesg.
+
+(`CameraProviderManager::openSession()` retries for ~4 s while the restarted
+provider registers, and `CameraClient::getParameters()` serves the cached blob
+while the client has no hardware, so neither the open nor getParameters fail
+any more.)
+
+What still fails is the app side of the switch: right after the provider
+restart Snap logs `setPreviewDisplay failed, surface is destoried`, closes the
+freshly opened front camera and then falls back to the cached parameters, so
+the user sees a black preview followed by uninitialised (green) buffers.
+
+Root cause of the whole family of problems: the 2013 HAL never releases what
+it opens.  After a session the provider still holds /dev/imx135,
+/dev/focuser, /dev/torch, /dev/tegra_camera and the nvhost VI channel (and
+the VI channel therefore shares its hardware context with the next session,
+which is why the front's CSI never produces frames when it reuses the rear's
+channel).
+
+Next ideas, in order:
+1. Close the HAL's leaked fds from the wrapper after each close (the wrapper
+   does not know them, but /proc/self/fd can be scanned for the vendor nodes
+   and closed - that would free the VI channel and the sensor, giving the next
+   session a genuinely fresh HAL without restarting the provider).
+2. Keep the restart but avoid the race: make the camera service hold the
+   client's preview surface across the provider restart, or delay the kill
+   until the next open is requested.
+3. Instrument `NvCameraViCsiInitializeChannel` (the blob) to see whether it
+   skips the CSI programming when the channel is already initialised.
+
 ## Next steps
 
 1. Camera: flash the build with the provider-restart + openSession retry and
