@@ -917,6 +917,40 @@ and then, if needed, disassemble `NvCameraViCsiInitializeHw`.  Note the blob's
 NvCameraViCsi* symbols are all internal (not exported) and the shared
 "already initialized" guard string lives at .rodata 0x87f64.
 
+## Session 18: blob RE toolkit
+
+Reversing libnvmm_camera.so needed two corrections:
+
+1. **Its .text is Thumb-2, not ARM.**  `objdump -d` disassembles it as ARM by
+   default and every literal-pool search misses; always use
+   `arm-linux-androideabi-objdump -d -M force-thumb`.
+2. **The NvCameraViCsi\* symbols are internal and their strings are not
+   reachable** through .rel.dyn, PC-relative loads or .data.rel.ro tables.
+   The working approach is dynamic: camshim dumps `android::CallStack` for
+   every ViCsi / "already initialized" / syncpt message, and the frames give
+   the addresses (offsets inside libnvmm_camera.so).
+
+First result from that: the focus-motor guard that produces
+"NvFmInitialize: Failed already initialized!!!" and error 0xd is at
+**libnvmm_camera.so 0x380e8**:
+
+    380ee: ldr  r4, [r5, #0]     ; static pointer
+    380f0: cbz  r4, 38102        ; NULL -> allocate 8 queues and continue
+    380f2: ...                   ; non-NULL -> "already initialized", r5 = 13
+    38084: (0xd = 13)            ;   and return 0xd
+
+Its teardown counterpart is at 0x380b8 (destroys the 8 queues, NvOsFree,
+stores NULL).  The call path is
+NvMMCameraOpen+1016 (0x9465) -> 0x7e13 -> 0x11ad9 -> 0x380fd.  A rear->front
+switch often hits the guard on the first open attempt and only succeeds on the
+wrapper's retry.
+
+The front sensor's stream behaviour after a rear session is now known exactly:
+the CSI never raises sync point 15, the HAL waits 5.2 s, then
+`NvCameraViCsiFixFence` forces the sync point to the threshold ("syncpt
+incremented to 621 (threshold 621)") - which is the green frame the user sees -
+and Snap's own 5 s preview timeout aborts the session.
+
 ## Next steps
 
 1. Camera: flash the build with the provider-restart + openSession retry and
