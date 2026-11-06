@@ -880,6 +880,43 @@ What that leaves, in order of likelihood:
    configured for (compare the CSI registers/commands of a working
    first-session front capture with a switch).
 
+## Session 17: the blob is now observable
+
+Two things came out of this session that are worth keeping:
+
+1. **The HAL's internal log is now visible.**  `libpisces_camshim` defines the
+   imported `NvOsDebugPrintf` and forwards it to logcat with the tag `NvOsDbg`.
+   Because the shim is loaded RTLD_GLOBAL before the vendor module, every
+   message the blob prints (VI/CSI state machine, "already initialized"
+   guards, sync point waits, block container errors) shows up there:
+
+       adb logcat -s NvOsDbg:D
+
+   That is what made the next finding possible.
+
+2. **The "no frames" symptom is a sync point wait failure, and
+   /dev/tegra_sema must NOT be closed.**  The blob waits for the CSI sync
+   point through semaphores obtained from /dev/tegra_sema; closing those
+   descriptors in the wrapper's cleanup made every wait fail with
+   `Waiting on the syncpt semaphore failed 0x30003` and the VI never saw a
+   frame.  With the semaphores kept, the front session now initialises
+   cleanly (`NvOdmImagerSetPowerLevel Level:3`,
+   `NvCamGranger HAL_camera_device_enable_msg_type 3`), but the CSI still does
+   not advance sync point 15 (`Camera Timeout: Sync Point ID: 15`).
+
+So the remaining defect is squarely in the CSI programming inside
+libnvmm_camera.so: `NvCameraViCsiInitializeHw` (and `NvCameraViCsiCtrl*`)
+decide the CSI lane/mode configuration, and after a rear session they do not
+reprogram it for the front sensor.  With NvOsDbg logging the next step is to
+diff the message sequence of
+
+  (a) a working first-session front capture, and
+  (b) a rear->front switch
+
+and then, if needed, disassemble `NvCameraViCsiInitializeHw`.  Note the blob's
+NvCameraViCsi* symbols are all internal (not exported) and the shared
+"already initialized" guard string lives at .rodata 0x87f64.
+
 ## Next steps
 
 1. Camera: flash the build with the provider-restart + openSession retry and
