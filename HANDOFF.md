@@ -555,7 +555,27 @@ Verified: `iw dev wlan0 info` = type AP, `192.168.43.242/24`, hostapd up,
 0.0.0.0:67 and the AP address:53, stable for 2+ minutes.  (No upstream: the
 modem is not working, so clients get an IP but no internet.)
 
-### Vibration works
+### Vibration works (fixed in two steps)
+
+Step 1 (session 8): the Immersion userspace stack cannot initialise
+(`VibeDriverInitialize: Insufficient kernel parameters`, status -4), so the
+HAL was rewritten to use the kernel's timed_output interface
+(`/sys/class/timed_output/vibrator/enable`) - but the motor still did not move:
+the timer counted down and nothing else happened.
+
+Step 2 (session 9): the kernel driver is built with `DRV2604_USE_PWM_MODE 1`
+and the timed_output path only does `pwm_duty_enable(pwm, 0)` - the stock ROM
+always went through immvibed's force-sample stream, and that is what updated
+the PWM duty, so with no samples the duty stayed 0.  The driver already has a
+complete RTP path (`RTP=0x7F` + `MODE_REAL_TIME_PLAYBACK`, the DRV2604 runs
+its closed-loop LRA drive, back to `MODE_STANDBY` on timeout), so
+`drivers/tspdrv/ImmVibeSPI.c` now sets `DRV2604_USE_PWM_MODE 0`, and
+`drv2604_set_rtp_val()` was moved out of the `#if SKIP_LRA_AUTOCAL == 0`
+guard (this board is built with SKIP_LRA_AUTOCAL == 1, which used to hide it
+and broke the compile).
+
+Verified: dmesg shows `write 0x02, 0x7f` / `write 0x01, 0x05` on vibrate and
+`write 0x01, 0x40` (standby) at the end; the motor actually vibrates.
 
 The Immersion stack cannot initialise on this kernel:
 `VibeDriverInitialize: Insufficient kernel parameters` / `status=-4` (libpparam
