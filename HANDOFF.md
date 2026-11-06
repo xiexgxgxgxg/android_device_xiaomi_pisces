@@ -853,6 +853,33 @@ Next ideas, in order:
    surface race) - e.g. keep the preview surface alive across the switch - and
    use the restart path, which is known to give a working front stream.
 
+## Session 16: channel lifecycle ruled out
+
+Instrumented nvhost (`nvhost_getchannel` / `nvhost_putchannel`) and observed a
+rear->front switch:
+
+    nvhost_getchannel(vi): ok refcount=1 (was 0)
+    nvhost_getchannel(isp): ok refcount=1 (was 0)
+    vi vi: tegra_camera_open: ++
+    ...front session...
+    nvhost_putchannel(vi): refcount=1 ctx= (null)
+
+i.e. the VI and ISP nvhost channels are acquired from refcount 0 and released
+again for every camera session - a rear->front switch really does get a fresh
+channel, fresh cdma and a fresh hwctx.  The missing frames are therefore not a
+stale channel/context: the sensor streams (imx132 set_mode + stream on) but the
+CSI never raises the frame syncpoint (id 11, csi_vi_0).
+
+What that leaves, in order of likelihood:
+1. The CSI (MIPI) receiver is not (re)programmed for the front sensor's lane
+   configuration/mode.  `NvCameraViCsiInitializeHw` in libnvmm_camera.so is the
+   function to reverse (it is internal to the blob; none of the NvCameraViCsi*
+   symbols are exported, and the "already initialized" guard is the shared
+   "%s: Failed already initialized!!!" string at .rodata 0x87f64).
+2. The front sensor's mode the HAL picks for preview is not the one the CSI is
+   configured for (compare the CSI registers/commands of a working
+   first-session front capture with a switch).
+
 ## Next steps
 
 1. Camera: flash the build with the provider-restart + openSession retry and
