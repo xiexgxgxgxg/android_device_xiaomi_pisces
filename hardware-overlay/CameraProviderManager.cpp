@@ -311,24 +311,46 @@ status_t CameraProviderManager::openSession(const std::string &id,
         /*out*/
         sp<hardware::camera::device::V1_0::ICameraDevice> *session) {
 
-    std::lock_guard<std::mutex> lock(mInterfaceMutex);
+    /*
+     * pisces: the camera provider deliberately restarts after every camera
+     * close (the 2013 HAL cannot reset its module-global state, which broke
+     * the second session - reopen or rear<->front switch - with 0xd and a
+     * green preview).  The camera service therefore has to wait for the fresh
+     * provider instead of failing the client's open; retry for ~4 s, dropping
+     * mInterfaceMutex while sleeping so the provider can re-register.
+     */
+    const int kAttempts = 14;
+    for (int attempt = 0; attempt < kAttempts; attempt++) {
+        sp<ProviderInfo::DeviceInfo1> deviceInfo1;
+        {
+            std::lock_guard<std::mutex> lock(mInterfaceMutex);
+            auto deviceInfo = findDeviceInfoLocked(id,
+                    /*minVersion*/ {1,0}, /*maxVersion*/ {2,0});
+            if (deviceInfo != nullptr) {
+                deviceInfo1 = static_cast<ProviderInfo::DeviceInfo1*>(deviceInfo);
+            }
+        }
 
-    auto deviceInfo = findDeviceInfoLocked(id,
-            /*minVersion*/ {1,0}, /*maxVersion*/ {2,0});
-    if (deviceInfo == nullptr) return NAME_NOT_FOUND;
-
-    auto *deviceInfo1 = static_cast<ProviderInfo::DeviceInfo1*>(deviceInfo);
-
-    hardware::Return<Status> status = deviceInfo1->mInterface->open(callback);
-    if (!status.isOk()) {
-        ALOGE("%s: Transaction error opening a session for camera device %s: %s",
-                __FUNCTION__, id.c_str(), status.description().c_str());
-        return DEAD_OBJECT;
+        if (deviceInfo1 != nullptr) {
+            hardware::Return<Status> status = deviceInfo1->mInterface->open(callback);
+            if (status.isOk() && status == Status::OK) {
+                *session = deviceInfo1->mInterface;
+                return OK;
+            }
+            ALOGW("%s: open of camera %s failed on attempt %d (%s), retrying",
+                    __FUNCTION__, id.c_str(), attempt,
+                    status.isOk() ? CameraProviderManager::statusToString(status)
+                                  : status.description().c_str());
+        } else if (attempt == 0) {
+            ALOGW("%s: camera %s not present yet, waiting for the provider",
+                    __FUNCTION__, id.c_str());
+        }
+        usleep(300000);
     }
-    if (status == Status::OK) {
-        *session = deviceInfo1->mInterface;
-    }
-    return mapToStatusT(status);
+
+    ALOGE("%s: giving up on camera %s after %d attempts", __FUNCTION__,
+            id.c_str(), kAttempts);
+    return DEAD_OBJECT;
 }
 
 
@@ -914,39 +936,19 @@ CameraProviderManager::ProviderInfo::DeviceInfo1::DeviceInfo1(const std::string&
         DeviceInfo(name, tagId, id, hardware::hidl_version{1, minorVersion},
                    resourceCost),
         mInterface(interface) {
-    // Get default parameters and initialize flash unit availability
-    // Requires powering on the camera device
-    hardware::Return<Status> status = mInterface->open(nullptr);
-    if (!status.isOk()) {
-        ALOGE("%s: Transaction error opening camera device %s to check for a flash unit: %s",
-                __FUNCTION__, mId.c_str(), status.description().c_str());
-        return;
-    }
-    if (status != Status::OK) {
-        ALOGE("%s: Unable to open camera device %s to check for a flash unit: %s", __FUNCTION__,
-                mId.c_str(), CameraProviderManager::statusToString(status));
-        return;
-    }
-    hardware::Return<void> ret;
-    ret = mInterface->getParameters([this](const hardware::hidl_string& parms) {
-                mDefaultParameters.unflatten(String8(parms.c_str()));
-            });
-    if (!ret.isOk()) {
-        ALOGE("%s: Transaction error reading camera device %s params to check for a flash unit: %s",
-                __FUNCTION__, mId.c_str(), status.description().c_str());
-        return;
-    }
-    const char *flashMode =
-            mDefaultParameters.get(CameraParameters::KEY_SUPPORTED_FLASH_MODES);
-    if (flashMode && strstr(flashMode, CameraParameters::FLASH_MODE_TORCH)) {
-        mHasFlashUnit = true;
-    }
-
-    ret = mInterface->close();
-    if (!ret.isOk()) {
-        ALOGE("%s: Transaction error closing camera device %s after check for a flash unit: %s",
-                __FUNCTION__, mId.c_str(), status.description().c_str());
-    }
+    // pisces: do NOT probe the camera by opening it here.
+    //
+    // Stock Android opens each device once at enumeration time "to check for a
+    // flash unit", reads the default parameters and closes it again.  The 2013
+    // tegra HAL powers the sensor (and opens /dev/imx135, /dev/nvhost-vi and
+    // /dev/tegra_camera) during that open, but its getParameters() is not
+    // implemented, so this code returned early without ever calling close().
+    // The sensor stayed claimed and every later open - the real one from the
+    // camera app - failed with
+    //   IMX135: Can not open camera device: Device or resource busy
+    //   setupHalInLock:539 failed to open camera! Error: 0x70001
+    // Skipping the probe leaves mHasFlashUnit false (no flash UI) but lets the
+    // first open be the application's own, which is the one that works.
 }
 
 CameraProviderManager::ProviderInfo::DeviceInfo1::~DeviceInfo1() {}

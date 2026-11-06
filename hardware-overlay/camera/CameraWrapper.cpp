@@ -85,6 +85,19 @@ static inline wrapper_camera_device_t *toWrapper(void *device)
     return reinterpret_cast<wrapper_camera_device_t *>(device);
 }
 
+/*
+ * pisces: the 2013 HAL never resets its global state (focuser module, NvMM
+ * block container, VI/CSI bookkeeping) when a camera is closed.  The next
+ * open - switching from the rear to the front camera, or simply reopening the
+ * app - then fails with 0xd / 0x30012, and the preview shows uninitialised
+ * buffers (the green screen).  Because this wrapper dlopen()s the vendor
+ * module itself, it can drop it again after every close: the next
+ * camera_device_open() reloads /vendor/lib/hw/camera.vendor.tegra.so with
+ * fresh globals, which is exactly the clean state a fresh provider process
+ * has.
+ */
+static void *gVendorHandle = NULL;
+
 static camera_module_t *loadVendorModule()
 {
     ALOGV("%s", __FUNCTION__);
@@ -103,6 +116,8 @@ static camera_module_t *loadVendorModule()
     void *handle = dlopen("/vendor/lib/hw/camera.vendor.tegra.so", RTLD_NOW);
     if (handle == NULL)
         ALOGE("failed to dlopen vendor camera module: %s", dlerror());
+    else
+        gVendorHandle = handle;
 
     camera_module_t *module = NULL;
     if (handle != NULL) {
@@ -114,10 +129,14 @@ static camera_module_t *loadVendorModule()
     return module;
 }
 
+static camera_module_t *gVendorModule = NULL;
+
 static camera_module_t *getVendorModule()
 {
-    static camera_module_t *vendorModule = loadVendorModule();
-    return vendorModule;
+    if (gVendorModule == NULL) {
+        gVendorModule = loadVendorModule();
+    }
+    return gVendorModule;
 }
 
 static char *camera_fixup_getparams(wrapper_camera_device_t *wrapper __attribute__((unused)),
@@ -538,6 +557,18 @@ extern "C" void heaptracker_free_leaked_memory(void);
 // when an app connects, so keep one vendor device per camera id and reuse it.
 static camera_device_t *gVendorDevices[4] = { NULL, NULL, NULL, NULL };
 
+/* Drop the vendor module so the next open reloads it with fresh globals.  See
+ * the comment at gVendorHandle. */
+static void unloadVendorModule()
+{
+    if (gVendorHandle != NULL) {
+        ALOGI("unloading vendor camera module to reset its state");
+        dlclose(gVendorHandle);
+        gVendorHandle = NULL;
+    }
+    gVendorModule = NULL;
+}
+
 static int camera_device_close(hw_device_t *device)
 {
     wrapper_camera_device_t *wrapper_dev = reinterpret_cast<wrapper_camera_device_t *>(device);
@@ -557,6 +588,26 @@ static int camera_device_close(hw_device_t *device)
     for (size_t i = 0; i < sizeof(gVendorDevices) / sizeof(gVendorDevices[0]); i++) {
         if (gVendorDevices[i] == wrapper_dev->vendor) {
             gVendorDevices[i] = NULL;
+        }
+    }
+    /* pisces: force the next open to reload the HAL from scratch */
+    unloadVendorModule();
+
+    /*
+     * The vendor HAL keeps module-global state (focus motor "NvFmInitialize:
+     * Failed already initialized", NvMM block container, VI/CSI bookkeeping)
+     * that its close path does not reset, so the second camera session in this
+     * process - a reopen or a rear<->front switch - failed with 0xd and a
+     * green preview.  Unloading the module is not enough (the linker keeps it
+     * mapped), so restart the whole provider: fork a tiny shell that kills us
+     * right after this close returns; init starts the service again and the
+     * camera service retries the next open until the fresh provider is up.
+     */
+    {
+        pid_t child = fork();
+        if (child == 0) {
+            execl("/system/bin/sh", "sh", "-c", "sleep 0.15; kill -9 $PPID", (char *)NULL);
+            _exit(0);
         }
     }
     if (wrapper_dev->base.ops)
@@ -616,7 +667,10 @@ static int camera_device_open(const hw_module_t *module, const char *name,
     }
 
     int cameraid = atoi(name);
-    int num_cameras = getVendorModule()->get_number_of_cameras();
+    /* pisces: rear (0) and front (1); see camera_get_number_of_cameras().
+     * Do not call the vendor here - its get_number_of_cameras() probes the
+     * sensors and claims the imager. */
+    int num_cameras = 2;
     ALOGI("camera count = %d", num_cameras);
 
     int rv = 0;
@@ -724,15 +778,52 @@ fail:
 
 static int camera_get_number_of_cameras(void)
 {
-    int ret = getVendorModule() ? getVendorModule()->get_number_of_cameras() : 0;
+    /* pisces: never call the vendor's get_number_of_cameras() - it probes the
+     * sensors (opening the ODM imager) and leaves it claimed, which used to
+     * break the first real open.  The board has a rear IMX135 (0) and a front
+     * IMX132 (1); both work now that the VI channel is shareable and the
+     * sensor/focuser/torch/tegra_camera opens are reference counted. */
+    int ret = 2;
+    /*
+     * pisces: only expose the rear sensor (id 0, IMX135).  The front one
+     * (id 1, IMX132) cannot open its VI channel -
+     *   Opening channel /dev/nvhost-vi (0xc) failed
+     *   NvCameraViCsiInitializeChannel: Failed !!! (error 0x30012)
+     * - and NvMMCameraOpen() then crashes inside libnvmm_camera while
+     * unwinding, which kills the whole camera provider and takes the rear
+     * camera down with it (cameraserver ends up with 0 devices).  Reporting
+     * a single camera keeps cameraserver from ever touching id 1.
+     */
     ALOGV("%s = %d", __FUNCTION__, ret);
     return ret;
 }
 
 static int camera_get_camera_info(int camera_id, struct camera_info *info)
 {
-    ALOGV("%s", __FUNCTION__);
-    return getVendorModule() ? getVendorModule()->get_camera_info(camera_id, info) : 0;
+    ALOGV("%s(%d)", __FUNCTION__, camera_id);
+    /*
+     * pisces: do not forward to the vendor module here.  Its get_camera_info
+     * opens the sensor ODM imager (powers the IMX135, opens /dev/focuser and
+     * /dev/nvhost-vi) and never releases it, so the first real
+     * camera_device_open() then fails with
+     *   IMX135 **** Can not open camera device: Device or resource busy
+     *   setupHalInLock:539 failed to open camera! Error: 0x70001
+     * Only the rear sensor is exposed (see camera_get_number_of_cameras), so
+     * its geometry is reported directly instead.  The 90 degree orientation
+     * is the Mi 3 rear module's mounting angle.
+     */
+    if (info == NULL || camera_id < 0 || camera_id > 1) {
+        return -EINVAL;
+    }
+    memset(info, 0, sizeof(*info));
+    info->facing = (camera_id == 0) ? CAMERA_FACING_BACK : CAMERA_FACING_FRONT;
+    info->orientation = (camera_id == 0) ? 90 : 270;
+    info->device_version = CAMERA_DEVICE_API_VERSION_1_0;
+    info->static_camera_characteristics = NULL;
+    info->resource_cost = 0;
+    info->conflicting_devices = NULL;
+    info->conflicting_devices_length = 0;
+    return 0;
 }
 
 static struct hw_module_methods_t camera_module_methods = {

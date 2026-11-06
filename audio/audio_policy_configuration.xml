@@ -14,7 +14,7 @@
                      (-38) unless one of the mix ports carries that flag. -->
                 <mixPort name="primary output" role="source" flags="AUDIO_OUTPUT_FLAG_PRIMARY|AUDIO_OUTPUT_FLAG_DEEP_BUFFER">
                     <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
-                             samplingRates="44100,48000" channelMasks="AUDIO_CHANNEL_OUT_STEREO"/>
+                             samplingRates="44100" channelMasks="AUDIO_CHANNEL_OUT_STEREO"/>
                 </mixPort>
                 <mixPort name="primary input" role="sink">
                     <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
@@ -23,11 +23,20 @@
             </mixPorts>
             <devicePorts>
                 <devicePort tagName="Speaker" type="AUDIO_DEVICE_OUT_SPEAKER" role="sink"/>
+                <!-- pisces: the CS42L73 headphone output and the wired headset
+                     (mic included).  Without these ports the audio policy
+                     rejects the jack WiredAccessoryManager reports:
+                     "could not find HW module for device 00000004". -->
+                <devicePort tagName="Wired Headphones" type="AUDIO_DEVICE_OUT_WIRED_HEADPHONE" role="sink"/>
+                <devicePort tagName="Wired Headset" type="AUDIO_DEVICE_OUT_WIRED_HEADSET" role="sink"/>
                 <devicePort tagName="Built-In Mic" type="AUDIO_DEVICE_IN_BUILTIN_MIC" role="source"/>
+                <devicePort tagName="Wired Headset Mic" type="AUDIO_DEVICE_IN_WIRED_HEADSET" role="source"/>
             </devicePorts>
             <routes>
                 <route type="mix" sink="Speaker" sources="primary output"/>
-                <route type="mix" sink="primary input" sources="Built-In Mic"/>
+                <route type="mix" sink="Wired Headphones" sources="primary output"/>
+                <route type="mix" sink="Wired Headset" sources="primary output"/>
+                <route type="mix" sink="primary input" sources="Built-In Mic,Wired Headset Mic"/>
             </routes>
         </module>
     </modules>

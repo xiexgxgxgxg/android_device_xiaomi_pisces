@@ -21,6 +21,8 @@
  * LD_PRELOADed into the camera provider service.
  */
 
+#include <unistd.h>
+
 #include <sensor/SensorManager.h>
 #include <sensor/SensorEventQueue.h>
 #include <utils/String16.h>
@@ -35,18 +37,6 @@ using android::String8;
 // functions it resolves by symbol, and createEventQueue() returns a
 // non-trivial sp<> through a hidden pointer (r0 = return slot, r1 = this).
 #define PISCES_METHOD(name) extern "C" __attribute__((visibility("default"))) name
-
-namespace {
-
-android::SensorManager& cameraSensorManager() {
-    static android::SensorManager* manager = nullptr;
-    if (manager == nullptr) {
-        manager = &android::SensorManager::getInstanceForPackage(String16("camera"));
-    }
-    return *manager;
-}
-
-}  // namespace
 
 // The blobs (libFaceProc.so in particular) still carry text relocations, which
 // bionic refuses to load for a process targeting API 23 or newer.  Dropping the
@@ -73,9 +63,18 @@ PISCES_METHOD(void) _ZN7android13SensorManagerC1Ev(void *self) { (void)self; }
 PISCES_METHOD(void) _ZN7android13SensorManagerC2Ev(void *self) { (void)self; }
 
 // const android::Sensor *SensorManager::getDefaultSensor(int) const
+//
+// Do NOT forward this to the real SensorManager: there is no sensors HAL on
+// this device, so the real getInstanceForPackage()/getDefaultSensor() blocks
+// forever in ServiceManager::getService("sensorservice") (observed as an
+// endless "Waiting for service 'sensorservice'" loop in the camera provider).
+// The camera HAL only uses the returned pointer for enableSensor()/
+// setEventRate(), which are stubbed, so returning NULL is enough; the sensor
+// listener then simply has no sensors to report.
 PISCES_METHOD(void *) _ZN7android13SensorManager16getDefaultSensorEi(void *self, int type) {
     (void)self;
-    return const_cast<Sensor*>(cameraSensorManager().getDefaultSensor(type));
+    (void)type;
+    return nullptr;
 }
 
 // android::sp<android::SensorEventQueue> SensorManager::createEventQueue()
@@ -89,43 +88,81 @@ PISCES_METHOD(void *) _ZN7android13SensorManager16getDefaultSensorEi(void *self,
 namespace {
 class CameraDummyQueue : public android::RefBase {};
 CameraDummyQueue gDummyQueue;
+// The HAL drops its sp<> again when the sensor listener goes away; with the
+// last reference gone RefBase would "delete this" on the static object above
+// and the camera provider died in ifree().  Keep one reference forever.
+android::sp<SensorEventQueue> gDummyQueueKeepAlive;
 }  // namespace
 
 PISCES_METHOD(void *) _ZN7android13SensorManager16createEventQueueEv(void *ret, void *self) {
     (void)self;
-    android::sp<SensorEventQueue> queue(
-            reinterpret_cast<SensorEventQueue*>(&gDummyQueue));
-    new (ret) android::sp<SensorEventQueue>(queue);
+    if (gDummyQueueKeepAlive == nullptr) {
+        gDummyQueueKeepAlive =
+                android::sp<SensorEventQueue>(
+                        reinterpret_cast<SensorEventQueue*>(&gDummyQueue));
+    }
+    new (ret) android::sp<SensorEventQueue>(gDummyQueueKeepAlive);
     return ret;
 }
 
-// android::SensorEventQueue members, forwarded to the real Android 9 object.
+// android::SensorEventQueue members.
+//
+// These can NOT forward to the real Android 9 object: the real methods have
+// exactly the same mangled names as these definitions, so a call such as
+// static_cast<SensorEventQueue*>(self)->read(...) resolves to *this* function,
+// i.e. the shim used to call itself.  With -O2 the compiler turned that tail
+// recursion into an infinite loop (a two byte "b ." at the entry point), the
+// camera HAL's sensor-listener thread never came back from initialize(), and
+// NvCameraHal::setupHalInLock() blocked forever in pthread_join() - that was
+// the camera deadlock (13 more threads sat in tegra_sema_wait behind it).
+//
+// There is also no sensors HAL on this device, so there is no real queue to
+// forward to anyway: a dummy queue is created by createEventQueue() above and
+// the listener only needs these calls to return instead of hanging.  read()
+// reports "no events", getFd() a dead fd, and the rest success.
 PISCES_METHOD(int) _ZN7android16SensorEventQueue4readEP12ASensorEventj(void *self,
                                                                        void *events,
                                                                        unsigned int count) {
-    return static_cast<SensorEventQueue*>(self)->read(
-            static_cast<ASensorEvent*>(events), count);
+    (void)self;
+    (void)events;
+    (void)count;
+    return 0;
 }
 
 PISCES_METHOD(int) _ZNK7android16SensorEventQueue5getFdEv(void *self) {
-    return static_cast<const SensorEventQueue*>(self)->getFd();
+    (void)self;
+    /*
+     * A real (but永远 empty) pipe: the HAL puts this fd into a Looper
+     * ("Error adding epoll events for fd -1" when it was -1) and polls it for
+     * sensor events.  Nobody ever writes to it, so read() above never has
+     * anything to report, but the listener thread stays healthy.
+     */
+    static int fds[2] = {-1, -1};
+    if (fds[0] < 0 && pipe(fds) != 0) {
+        return -1;
+    }
+    return fds[0];
 }
 
 PISCES_METHOD(int) _ZNK7android16SensorEventQueue12enableSensorEPKNS_6SensorE(void *self,
                                                                              void *sensor) {
-    return static_cast<const SensorEventQueue*>(self)->enableSensor(
-            static_cast<const Sensor*>(sensor));
+    (void)self;
+    (void)sensor;
+    return 0;
 }
 
 PISCES_METHOD(int) _ZNK7android16SensorEventQueue13disableSensorEPKNS_6SensorE(void *self,
                                                                               void *sensor) {
-    return static_cast<const SensorEventQueue*>(self)->disableSensor(
-            static_cast<const Sensor*>(sensor));
+    (void)self;
+    (void)sensor;
+    return 0;
 }
 
 PISCES_METHOD(int) _ZNK7android16SensorEventQueue12setEventRateEPKNS_6SensorEx(void *self,
                                                                               void *sensor,
                                                                               long long rate) {
-    return static_cast<const SensorEventQueue*>(self)->setEventRate(
-            static_cast<const Sensor*>(sensor), rate);
+    (void)self;
+    (void)sensor;
+    (void)rate;
+    return 0;
 }

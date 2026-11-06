@@ -649,7 +649,116 @@ that `nvavp_os_0ff00000.bin` does not carry; (3) port `tegra_v4l2_camera.c`
 to T114 (it is the Tegra 2/3 nvhost API and does not compile) as the fallback
 capture path.
 
+## Session 9: the camera deadlock was OUR OWN SHIM
+
+The `NvCameraHal::setupHalInLock()` -> `pthread_join()` deadlock was not NvMM
+at all: the joined thread is `SetupSensorListener` -> `NvSensorListener::
+initialize()` -> `SensorEventQueue::read()`, and that call landed on
+`libpisces_camshim.so`, which had been compiled into an infinite loop
+
+    e84: e7fe   b.n e84      ; "b ." - two bytes and nothing else
+
+because the shim defined the five `SensorEventQueue` methods with their real
+mangled names and implemented them as
+`static_cast<SensorEventQueue*>(self)->read(...)` - i.e. it called itself, and
+clang turned that tail recursion into `b .`.  The sensor listener never
+returned and 13 NvMM worker threads piled up behind it in `tegra_sema_wait`.
+
+Fixes in `hardware/nvidia/pisces/shims/camshim.cpp`:
+ - the five methods are plain stubs now (read -> 0 events, getFd -> a dead
+   pipe read end, enable/disable/setEventRate -> 0): there is no sensors HAL,
+   so there is nothing to forward to;
+ - `SensorManager::getDefaultSensor` returns NULL instead of asking the real
+   SensorManager (which blocked forever in
+   `ServiceManager::getService("sensorservice")`);
+ - the dummy queue is kept alive by a static `sp<>` - the HAL drops its
+   reference on close and RefBase then deleted the static object (provider died
+   in ifree()).
+
+With those three the HAL really opens the sensor and
+`CameraProviderManager` reports "Camera provider legacy/0 ready with 1 camera
+devices".
+
+## Session 10: single-open drivers and framework probes
+
+The 2013 HAL keeps its /dev nodes open across a camera close, so after the
+first session every later open failed with -EBUSY.  Reference-counted the
+open in: `imx135.c` (/dev/imx135), `ad5823.c` (/dev/focuser - this board uses
+ad5823, not dw9718), `max77665-flash.c` (/dev/torch) and
+`drivers/video/tegra/camera/camera.c` (/dev/tegra_camera, the VI/CSI control
+node); `t114.c` no longer marks the VI channel `.exclusive`
+(`Opening channel /dev/nvhost-vi (0xc) failed` / 0x30012).
+
+Two framework probes opened the camera before any app did and left the HAL
+state dirty; both are disabled now:
+ - `CameraProviderManager`'s DeviceInfo1 "open to check for a flash unit";
+ - `CameraFlashlight::findFlashUnits()` (it reports a flash for the rear
+   camera without touching the device).
+
+`frameworks/av/.../CameraService.cpp`: the "cameraserver" API1 client seen at
+every boot (`initializeShimMetadata`) is the legacy-parameter probe.  Its
+parameter blob is now cached in
+`/data/misc/cameraserver/pisces_shim_params.txt` and served from there on
+later boots, so the camera is not opened before the app opens it.  The first
+boot after a flash still pays the probe and writes the cache.
+
+The wrapper owns the camera list: `camera_get_number_of_cameras()` returns 2
+and `camera_get_camera_info()` reports back (id 0, orientation 90) and front
+(id 1, orientation 270) directly - calling the vendor's versions powered the
+ODM imager at enumeration and never released it.
+
+## Session 11: both cameras take photos
+
+Verified on the device: rear IMX135 photos (3120x4208 JPEG) and front IMX132
+photos (1080x1920) - `/sdcard/DCIM/Camera/`.  Preview goes through the MDP
+overlay path, so `screencap` returns an empty file while previewing; use the
+shutter and look at the file.
+
+Remaining camera issue: **only the first session in a provider process
+works**.  The HAL's module-global state (focus motor `NvFmInitialize: Failed
+already initialized`, NvMM block container, VI/CSI bookkeeping) is not reset
+by its close path, so reopening the app or switching rear<->front failed with
+0xd (the front after the rear: 30 s black preview, green uninitialised
+frames, app crash).  `dlclose()`ing the vendor module does not help - the
+linker keeps it mapped.  The fix in the next build: the wrapper kills the
+provider right after every camera close (`fork()` + `sh -c "sleep 0.15;
+kill -9 $PPID"`; init restarts the service automatically) and
+`CameraProviderManager::openSession()` retries the open for ~4 s while the
+fresh provider registers.
+
+## Session 12: torch and headphones
+
+**Torch**: works.  `max77665-flash` exposes the LED as
+`/sys/class/leds/flashlight`; `CameraFlashlight::setTorchMode()` writes it
+directly (0/255) instead of opening the camera, and `findFlashUnits()` claims
+the flash for the rear camera without probing.
+
+**Headphones**: work (sound comes out of the headset, jack recognised).  The
+chain:
+ 1. `TEGRA_GPIO_HP_DET` is -1 on this board, so the kernel never reported the
+    jack.  The FSA8108 switch driver (`drivers/input/misc/fsa8108.c`, event6)
+    does see the plug; it now publishes the h2w state through the new
+    `tegra_asoc_utils_set_h2w_state()` export
+    (`sound/soc/tegra/tegra_asoc_utils.c`), i.e. `/sys/class/switch/h2w`
+    (0 = unplugged, 1 = headset, 2 = headphones).
+ 2. `WiredAccessoryManager` then connects AUDIO_DEVICE_OUT_WIRED_HEADSET.
+ 3. `device/xiaomi/pisces/audio/audio_policy_configuration.xml` was missing
+    the wired ports ("could not find HW module for device 00000004"); it now
+    declares Wired Headphones / Wired Headset / Wired Headset Mic + routes.
+ 4. The HAL (`hardware/nvidia/pisces/audio/audio_hw_pisces.c`) implements
+    `get_supported_devices()`, parses `routing=<hex>` and applies the
+    headphone mixer route (Int Spk Switch 0, Headphone Switch 1, Headphone
+    Analog Playback Volume 63/63).
+
 ## Next steps
+
+1. Camera: flash the build with the provider-restart + openSession retry and
+   verify reopen and rear<->front switching.
+2. Front camera quality/exposure tuning (it works but is a 2 MP sensor).
+3. Sensors HAL (still none; camshim stubs the sensor entries).
+4. Baseband/RIL and GPS daemon (libril/linker issues).
+5. Gate the nvmap debug prints.
+
 
 1. Camera (the only big open item): find the 5 s wait inside
    `NvCameraHal::setupHalInLock` (timestamped strace of the provider, then

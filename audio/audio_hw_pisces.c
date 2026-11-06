@@ -55,7 +55,7 @@ struct pisces_audio_device {
     struct audio_hw_device device;
     pthread_mutex_t lock;
     struct mixer *mixer;
-    bool route_speaker;
+    int route;           /* enum pisces_route */
 };
 
 #define PISCES_RING_BYTES (32 * 1024)
@@ -155,7 +155,32 @@ static void pisces_set_speaker_route(struct pisces_audio_device *adev) {
     ALOGI("speaker route applied");
 }
 
-static void pisces_apply_route(struct pisces_audio_device *adev, bool speaker) {
+/* Headphone path: HPOUTA/HPOUTB <- HP Amp <- HL Left/Right DAC (the
+ * "Headphone" DAPM pin switch of the cs42l73 machine driver).  The speaker is
+ * switched off at the same time - both share the codec's HL DAC. */
+static void pisces_set_headphone_route(struct pisces_audio_device *adev) {
+    struct mixer *m = adev->mixer;
+    if (m == NULL) {
+        return;
+    }
+
+    mixer_set_int(m, "Int Spk Switch", 0);
+    struct mixer_ctl *hp_vol = mixer_get_ctl_by_name(m, "Headphone Analog Playback Volume");
+    if (hp_vol != NULL) {
+        mixer_ctl_set_value(hp_vol, 0, 63);
+        mixer_ctl_set_value(hp_vol, 1, 63);
+    }
+    mixer_set_int(m, "Headphone Switch", 1);
+
+    ALOGI("headphone route applied");
+}
+
+enum pisces_route {
+    PISCES_ROUTE_SPEAKER = 0,
+    PISCES_ROUTE_HEADPHONE = 1,
+};
+
+static void pisces_apply_route(struct pisces_audio_device *adev, int route) {
     pthread_mutex_lock(&adev->lock);
     if (adev->mixer == NULL) {
         adev->mixer = mixer_open(PISCES_CARD);
@@ -163,11 +188,33 @@ static void pisces_apply_route(struct pisces_audio_device *adev, bool speaker) {
             ALOGE("cannot open the mixer for card %d", PISCES_CARD);
         }
     }
-    if (adev->mixer != NULL && (speaker || !adev->route_speaker)) {
-        pisces_set_speaker_route(adev);
+    if (adev->mixer != NULL && route != adev->route) {
+        if (route == PISCES_ROUTE_HEADPHONE) {
+            pisces_set_headphone_route(adev);
+        } else {
+            pisces_set_speaker_route(adev);
+        }
+        adev->route = route;
     }
-    adev->route_speaker = speaker;
     pthread_mutex_unlock(&adev->lock);
+}
+
+/*
+ * The framework announces the active output device with
+ * set_parameters("routing=<hex mask>").  Pick the headphone path whenever a
+ * wired output is part of the mask, otherwise the speaker.
+ */
+static void pisces_handle_routing(struct pisces_audio_device *adev, const char *kvpairs) {
+    const char *value = strstr(kvpairs, "routing=");
+    if (value == NULL) {
+        return;
+    }
+    unsigned int routing = (unsigned int)strtoul(value + strlen("routing="), NULL, 16);
+    if (routing & (AUDIO_DEVICE_OUT_WIRED_HEADSET | AUDIO_DEVICE_OUT_WIRED_HEADPHONE)) {
+        pisces_apply_route(adev, PISCES_ROUTE_HEADPHONE);
+    } else if (routing & AUDIO_DEVICE_OUT_SPEAKER) {
+        pisces_apply_route(adev, PISCES_ROUTE_SPEAKER);
+    }
 }
 
 /* -------------------------------------------------------------- out stream */
@@ -213,13 +260,12 @@ static int out_set_format(struct audio_stream *stream, audio_format_t format) {
 }
 
 static int out_standby(struct audio_stream *stream) {
-    /* The writer thread does the actual closing once the ring is empty:
-     * closing it here directly raced with pcm_write() and crashed the HAL. */
     struct pisces_stream_out *out = (struct pisces_stream_out *)stream;
-    pthread_mutex_lock(&out->lock);
-    out->idle = true;
-    pthread_cond_signal(&out->cond);
-    pthread_mutex_unlock(&out->lock);
+
+    /* Keep the PCM open: AudioFlinger calls standby between consecutive UI
+     * sounds and reopening it each time added ~100 ms of latency (audible as a
+     * delay when stepping the volume).  The idle stream underruns instead, and
+     * out_write() recovers it with pcm_prepare(). */
     return 0;
 }
 
@@ -230,8 +276,10 @@ static int out_dump(const struct audio_stream *stream, int fd) {
 }
 
 static int out_set_parameters(struct audio_stream *stream, const char *kvpairs) {
-    (void)stream;
-    (void)kvpairs;
+    struct pisces_stream_out *out = (struct pisces_stream_out *)stream;
+    if (out->adev != NULL && kvpairs != NULL) {
+        pisces_handle_routing(out->adev, kvpairs);
+    }
     return 0;
 }
 
@@ -253,103 +301,42 @@ static int out_set_volume(struct audio_stream_out *stream, float left, float rig
     return 0;
 }
 
-static int g_write_count;
-
 static int out_open_pcm(struct pisces_stream_out *out);
 
-static void *out_writer_thread(void *arg) {
-    struct pisces_stream_out *out = (struct pisces_stream_out *)arg;
-    const size_t period_bytes = PISCES_PERIOD_SIZE * PISCES_OUT_CHANNELS * sizeof(int16_t);
-    static uint8_t staging[PISCES_PERIOD_SIZE * PISCES_OUT_CHANNELS * sizeof(int16_t)];
+static ssize_t out_write(struct audio_stream_out *stream, const void *buffer, size_t bytes) {
+    struct pisces_stream_out *out = (struct pisces_stream_out *)stream;
 
+    ALOGD("out_write(%zu)", bytes);
     pthread_mutex_lock(&out->lock);
-    while (!out->writer_exit) {
-        /* Prefer whole ALSA periods (feeding partial ones made the pacing
-         * irregular and the stream underran on long playback), but flush what
-         * is left after a short wait - a UI sound is often shorter than one
-         * 2048 frame period and would otherwise never be played at all. */
-        size_t chunk;
-        if (out->idle && out->ring_used == 0) {
-            if (out->pcm != NULL) {
-                pcm_close(out->pcm);
-                out->pcm = NULL;
-                /* drop anything still queued: replaying it after the reopen
-                 * sounded like the old audio playing again */
-                out->ring_head = out->ring_tail = out->ring_used = 0;
-                out->frames_to_pcm = 0;
-                out->last_pos = 0;
-                ALOGD("standby: pcm closed, ring reset");
-            }
-            out->idle = false;
-            continue;
-        }
-        if (out->ring_used >= period_bytes) {
-            chunk = period_bytes;
-        } else if (out->ring_used > 0) {
-            struct timespec ts;
-            clock_gettime(CLOCK_REALTIME, &ts);
-            ts.tv_nsec += 10 * 1000 * 1000;
-            if (ts.tv_nsec >= 1000000000) {
-                ts.tv_sec++;
-                ts.tv_nsec -= 1000000000;
-            }
-            pthread_cond_timedwait(&out->cond, &out->lock, &ts);
-            if (out->ring_used == 0) {
-                continue;
-            }
-            chunk = out->ring_used < period_bytes ? out->ring_used : period_bytes;
-        } else {
-            pthread_cond_wait(&out->cond, &out->lock);
-            continue;
-        }
-
-        /* copy the chunk out of the ring (it may wrap) */
-        size_t head = out->ring_head;
-        size_t first = PISCES_RING_BYTES - head;
-        if (first > chunk) first = chunk;
-        memcpy(staging, out->ring + head, first);
-        if (first < chunk) {
-            memcpy(staging + first, out->ring, chunk - first);
-        }
-        out->ring_head = (head + chunk) % PISCES_RING_BYTES;
-        out->ring_used -= chunk;
+    if (out->pcm == NULL && out_open_pcm(out) != 0) {
         pthread_mutex_unlock(&out->lock);
+        return -EIO;
+    }
 
-        int written = 0;
-        if (out->pcm == NULL && out_open_pcm(out) != 0) {
-            usleep(5000);
-        } else {
-            static int wr;
-            int ret = pcm_write(out->pcm, staging, chunk);
-            if ((wr++ % 10) == 0) {
-                ALOGD("writer #%d: %zu bytes ret=%d", wr, chunk, ret);
-            }
-            if (ret == 0) {
-                written = 1;
-            } else {
-                const char *err = pcm_get_error(out->pcm);
-                ALOGW("writer: pcm_write %d (%s)", ret, err != NULL ? err : "?");
-                if (pcm_prepare(out->pcm) != 0) {
-                    pcm_close(out->pcm);
-                    out->pcm = NULL;
-                    out->ring_head = out->ring_tail = out->ring_used = 0;
-                    out->frames_to_pcm = 0;
-                    out->last_pos = 0;
-                }
-                usleep(1000);
-            }
+    int ret = pcm_write(out->pcm, buffer, bytes);
+    if (ret != 0) {
+        const char *err = pcm_get_error(out->pcm);
+        ALOGW("pcm_write %d (%s)", ret, err != NULL ? err : "?");
+        /* underrun: re-arm the stream and retry once */
+        if (pcm_prepare(out->pcm) == 0) {
+            ret = pcm_write(out->pcm, buffer, bytes);
         }
-
-        pthread_mutex_lock(&out->lock);
-        if (written) {
-            out->frames_to_pcm += chunk / (PISCES_OUT_CHANNELS * sizeof(int16_t));
+        if (ret != 0) {
+            pcm_close(out->pcm);
+            out->pcm = NULL;
+            out->frames_to_pcm = 0;
+            out->last_pos = 0;
+            pthread_mutex_unlock(&out->lock);
+            return -EIO;
         }
     }
+    out->frames_to_pcm += bytes / (PISCES_OUT_CHANNELS * sizeof(int16_t));
     pthread_mutex_unlock(&out->lock);
-    return NULL;
+    return bytes;
 }
 
 static int out_open_pcm(struct pisces_stream_out *out) {
+    ALOGD("out_open_pcm(rate=%u)", out->sample_rate);
     struct pcm_config config = {
         .channels = PISCES_OUT_CHANNELS,
         .rate = out->sample_rate,
@@ -380,60 +367,6 @@ static int out_open_pcm(struct pisces_stream_out *out) {
     return 0;
 }
 
-static ssize_t out_write(struct audio_stream_out *stream, const void *buffer, size_t bytes) {
-    struct pisces_stream_out *out = (struct pisces_stream_out *)stream;
-
-    /* standby() closes the PCM; the framework keeps writing afterwards */
-    if (out->pcm == NULL) {
-        if (out_open_pcm(out) != 0) {
-            return -EIO;
-        }
-    }
-
-    if ((g_write_count++ % 10) == 0) {
-        ALOGD("out_write #%d: %zu bytes at %u Hz (ring %zu)",
-              g_write_count, bytes, out->sample_rate, out->ring_used);
-    }
-
-    pthread_mutex_lock(&out->lock);
-    out->idle = false;
-    const uint8_t *src = buffer;
-    size_t left = bytes;
-    while (left > 0) {
-        if (out->ring_used == PISCES_RING_BYTES) {
-            /* Backpressure instead of dropping: the writer drains at the
-             * hardware rate, so waiting here lets the producer's pacing follow
-             * the hardware.  Dropping made the first frames of every short UI
-             * sound disappear (audible as a click/gap). */
-            struct timespec ts;
-            clock_gettime(CLOCK_REALTIME, &ts);
-            ts.tv_nsec += 5 * 1000 * 1000;
-            if (ts.tv_nsec >= 1000000000) {
-                ts.tv_sec++;
-                ts.tv_nsec -= 1000000000;
-            }
-            pthread_cond_timedwait(&out->cond, &out->lock, &ts);
-            if (out->ring_used == PISCES_RING_BYTES) {
-                ALOGW("ring still full, dropping %zu bytes", left);
-                break;
-            }
-            continue;
-        }
-        size_t tail = out->ring_tail;
-        size_t space = PISCES_RING_BYTES - out->ring_used;
-        size_t first = PISCES_RING_BYTES - tail;
-        if (first > left) first = left;
-        if (first > space) first = space;
-        memcpy(out->ring + tail, src, first);
-        out->ring_tail = (tail + first) % PISCES_RING_BYTES;
-        out->ring_used += first;
-        src += first;
-        left -= first;
-    }
-    pthread_cond_signal(&out->cond);
-    pthread_mutex_unlock(&out->lock);
-    return bytes;
-}
 
 /* pcm_get_htimestamp() reports the *free* space in the ALSA buffer, so the
  * frames that actually reached the codec are
@@ -462,14 +395,20 @@ static int out_get_render_position(const struct audio_stream_out *stream, uint32
     unsigned int avail = 0;
     struct timespec ts;
 
+    /* the writer thread closes/reopens the PCM when the stream goes idle, so
+     * the pointer has to be checked and used under the lock (a race here made
+     * pcm_get_htimestamp(NULL) segfault the HAL) */
+    pthread_mutex_lock(&out->lock);
     if (out->pcm == NULL) {
+        pthread_mutex_unlock(&out->lock);
         return -ENODEV;
     }
-    if (pcm_get_htimestamp(out->pcm, &avail, &ts) < 0) {
-        return -EINVAL;
+    int ret = pcm_get_htimestamp(out->pcm, &avail, &ts);
+    if (ret == 0) {
+        *dsp_frames = (uint32_t)out_played_frames(out, avail);
     }
-    *dsp_frames = (uint32_t)out_played_frames(out, avail);
-    return 0;
+    pthread_mutex_unlock(&out->lock);
+    return ret < 0 ? -EINVAL : 0;
 }
 
 /* AudioFlinger paces its writes from this; without it the HAL looks like it
@@ -480,14 +419,23 @@ static int out_get_presentation_position(const struct audio_stream_out *stream,
     struct pisces_stream_out *out = (struct pisces_stream_out *)stream;
     unsigned int avail = 0;
 
+    pthread_mutex_lock(&out->lock);
     if (out->pcm == NULL) {
+        pthread_mutex_unlock(&out->lock);
         return -ENODEV;
     }
-    if (pcm_get_htimestamp(out->pcm, &avail, timestamp) < 0) {
-        return -EINVAL;
+    int ret = pcm_get_htimestamp(out->pcm, &avail, timestamp);
+    if (ret == 0) {
+        *frames = out_played_frames(out, avail);
+        static int pp;
+        if ((pp++ % 200) == 0) {
+            ALOGD("pos: pcm=%llu avail=%u bufsz=%u -> %llu",
+                  (unsigned long long)out->frames_to_pcm, avail,
+                  pcm_get_buffer_size(out->pcm), (unsigned long long)*frames);
+        }
     }
-    *frames = out_played_frames(out, avail);
-    return 0;
+    pthread_mutex_unlock(&out->lock);
+    return ret < 0 ? -EINVAL : 0;
 }
 
 static int out_get_next_write_timestamp(const struct audio_stream_out *stream,
@@ -627,9 +575,11 @@ static int adev_open_output_stream(struct audio_hw_device *dev, audio_io_handle_
     out->format = AUDIO_FORMAT_PCM_16_BIT;
     out->frame_count = PISCES_PERIOD_SIZE * PISCES_PERIOD_COUNT;
 
-    pisces_apply_route(adev, true);
     /* the PCM is opened by the writer thread on the first block: opening it
      * here let the DMA underrun while the framework was still idle */
+    if (adev->route < 0) {
+        pisces_apply_route(adev, PISCES_ROUTE_SPEAKER);
+    }
 
     out->stream.common.get_sample_rate = out_get_sample_rate;
     out->stream.common.set_sample_rate = out_set_sample_rate;
@@ -653,12 +603,6 @@ static int adev_open_output_stream(struct audio_hw_device *dev, audio_io_handle_
 
     pthread_mutex_init(&out->lock, NULL);
     pthread_cond_init(&out->cond, NULL);
-    out->writer_exit = false;
-    if (pthread_create(&out->writer, NULL, out_writer_thread, out) == 0) {
-        out->writer_started = true;
-    } else {
-        ALOGE("cannot start the writer thread");
-    }
 
     *stream_out = &out->stream;
     ALOGI("output stream open: %u Hz, %u channels, %d frames",
@@ -672,14 +616,6 @@ static void adev_close_output_stream(struct audio_hw_device *dev,
     (void)dev;
     struct pisces_stream_out *out = (struct pisces_stream_out *)stream;
 
-    if (out->writer_started) {
-        pthread_mutex_lock(&out->lock);
-        out->writer_exit = true;
-        pthread_cond_signal(&out->cond);
-        pthread_mutex_unlock(&out->lock);
-        pthread_join(out->writer, NULL);
-        out->writer_started = false;
-    }
     out_standby(&stream->common);
     pthread_mutex_destroy(&out->lock);
     pthread_cond_destroy(&out->cond);
@@ -736,8 +672,10 @@ static void adev_close_input_stream(struct audio_hw_device *dev,
 }
 
 static int adev_set_parameters(struct audio_hw_device *dev, const char *kvpairs) {
-    (void)dev;
-    (void)kvpairs;
+    struct pisces_audio_device *adev = (struct pisces_audio_device *)dev;
+    if (kvpairs != NULL) {
+        pisces_handle_routing(adev, kvpairs);
+    }
     return 0;
 }
 
@@ -745,6 +683,12 @@ static char *adev_get_parameters(const struct audio_hw_device *dev, const char *
     (void)dev;
     (void)keys;
     return strdup("");
+}
+
+static uint32_t adev_get_supported_devices(const struct audio_hw_device *dev) {
+    (void)dev;
+    return AUDIO_DEVICE_OUT_EARPIECE | AUDIO_DEVICE_OUT_SPEAKER |
+           AUDIO_DEVICE_OUT_WIRED_HEADSET | AUDIO_DEVICE_OUT_WIRED_HEADPHONE;
 }
 
 static int adev_init_check(const struct audio_hw_device *dev) {
@@ -857,6 +801,7 @@ static int adev_open(const hw_module_t *module, const char *name, hw_device_t **
     adev->device.open_input_stream = adev_open_input_stream;
     adev->device.close_input_stream = adev_close_input_stream;
     adev->device.dump = adev_dump;
+    adev->device.get_supported_devices = adev_get_supported_devices;
 
     adev->mixer = mixer_open(PISCES_CARD);
     if (adev->mixer == NULL) {

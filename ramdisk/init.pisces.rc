@@ -719,18 +719,30 @@ service wpa_supplicant /vendor/bin/hw/wpa_supplicant \
 # 22).  LD_PRELOAD is the only way to get them into the vendor module's linker
 # namespace.  This definition is parsed before /vendor/etc/init/..., so init
 # ignores the stock one.
-# pisces: the 2013 camera HAL also wants /dev/tegra_sema, /dev/tegra_rpc and
-# /dev/tegra_avpchannel (media:media) plus /dev/knvmap (system:system).  Adding
-# "media system" here does get much further - the sensor powers up and
-# NvCameraHal::ApplyChangedSettings() runs - but the NvMM block RPC then
-# deadlocks in tegra_sema_wait (13 threads never wake) and the open never
-# returns, which wedges cameraserver and makes every app that touches the
-# camera hang.  Keeping the stock group list keeps the failure at the clean
-# NvError 0x3 after 5 s until the block/AVP deadlock is understood.
+# pisces camera provider.  Findings from the session-9 investigation (the
+# stock kernel source has been cloned to /data/twrp/kernel/stock-src):
+#
+#  * The stock 3.4.35 kernel is configured exactly like ours
+#    (TEGRA_AVP=n, TEGRA_MEDIASERVER=n, TEGRA_NVAVP=y, SOC_CAMERA=n,
+#    TEGRA_CAMERA=y) and its tegra_v4l2_camera.c is byte-identical, so the
+#    stock ROM never had /dev/video* either - the missing V4L2 nodes are not
+#    the blocker.
+#  * The stock camera lived inside mediaserver, which ran as "user media"
+#    (uid 1013).  Running our provider the same way (user media, groups
+#    audio camera system inet drmrpc mediadrm radio) does get much further:
+#    the sensor powers up, NvCameraHal::ApplyChangedSettings() runs and the
+#    open takes ~1.3 s - and then setupHalInLock() blocks in pthread_join()
+#    waiting for a thread that sits in tegra_sema_wait forever (13 threads).
+#    The same happens with uid cameraserver plus the media/system groups, so
+#    it is not a permissions problem: the 2013 NvMM userspace deadlocks in
+#    its TRPC/semaphore IPC under Android 9's bionic.
+#  * Keeping the stock group list makes the open fail cleanly with
+#    NvError 0x3 after 5 s instead of wedging cameraserver, so every app that
+#    touches the camera still gets an error rather than a hang.
 service vendor.camera-provider-2-4 /vendor/bin/hw/android.hardware.camera.provider@2.4-service
     class hal
-    user cameraserver
-    group audio camera input drmrpc wakelock
+    user media
+    group audio camera system inet drmrpc mediadrm radio
     ioprio rt 4
     setenv LD_PRELOAD /system/lib/libpisces_camshim.so
     writepid /dev/cpuset/camera-daemon/tasks /dev/stune/top-app/tasks
