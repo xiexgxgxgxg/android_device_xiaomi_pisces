@@ -311,24 +311,43 @@ status_t CameraProviderManager::openSession(const std::string &id,
         /*out*/
         sp<hardware::camera::device::V1_0::ICameraDevice> *session) {
 
-    std::lock_guard<std::mutex> lock(mInterfaceMutex);
+    /*
+     * pisces: the camera provider is restarted after every camera close (the
+     * 2013 HAL cannot reset its module state, and a rear->front switch left
+     * the front sensor streaming into a dead CSI).  Retry the open for ~4 s,
+     * dropping mInterfaceMutex while sleeping so the new provider can
+     * register, instead of failing the client's open.
+     */
+    const int kAttempts = 14;
+    for (int attempt = 0; attempt < kAttempts; attempt++) {
+        ProviderInfo::DeviceInfo1 *deviceInfo1 = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(mInterfaceMutex);
+            auto deviceInfo = findDeviceInfoLocked(id,
+                    /*minVersion*/ {1,0}, /*maxVersion*/ {2,0});
+            if (deviceInfo != nullptr) {
+                deviceInfo1 = static_cast<ProviderInfo::DeviceInfo1*>(deviceInfo);
+            }
+        }
 
-    auto deviceInfo = findDeviceInfoLocked(id,
-            /*minVersion*/ {1,0}, /*maxVersion*/ {2,0});
-    if (deviceInfo == nullptr) return NAME_NOT_FOUND;
-
-    auto *deviceInfo1 = static_cast<ProviderInfo::DeviceInfo1*>(deviceInfo);
-
-    hardware::Return<Status> status = deviceInfo1->mInterface->open(callback);
-    if (!status.isOk()) {
-        ALOGE("%s: Transaction error opening a session for camera device %s: %s",
-                __FUNCTION__, id.c_str(), status.description().c_str());
-        return DEAD_OBJECT;
+        if (deviceInfo1 != nullptr) {
+            hardware::Return<Status> status = deviceInfo1->mInterface->open(callback);
+            if (status.isOk() && status == Status::OK) {
+                *session = deviceInfo1->mInterface;
+                return OK;
+            }
+            ALOGW("%s: open of camera %s failed on attempt %d, retrying",
+                    __FUNCTION__, id.c_str(), attempt);
+        } else if (attempt == 0) {
+            ALOGW("%s: camera %s not present yet, waiting for the provider",
+                    __FUNCTION__, id.c_str());
+        }
+        usleep(300000);
     }
-    if (status == Status::OK) {
-        *session = deviceInfo1->mInterface;
-    }
-    return mapToStatusT(status);
+
+    ALOGE("%s: giving up on camera %s after %d attempts", __FUNCTION__,
+            id.c_str(), kAttempts);
+    return DEAD_OBJECT;
 }
 
 
