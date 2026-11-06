@@ -815,6 +815,44 @@ Next ideas, in order:
 3. Instrument `NvCameraViCsiInitializeChannel` (the blob) to see whether it
    skips the CSI programming when the channel is already initialised.
 
+## Session 15: what the rear/front switch still needs
+
+Everything up to frame delivery is in place and verified on the device:
+
+  close -> leaked descriptors closed (/dev/imx135, imx132, focuser, torch,
+  nvhost-vi, nvhost-isp, tegra_camera, mipi-cal, tegra_sema) -> vendor open
+  (retried if it comes back 0xd) -> per-sensor parameter blob cached in
+  /data/misc/pisces_camera/params_<id>.txt -> framework configured with the
+  right sizes -> set_parameters applied asynchronously so the framework is not
+  blocked by the HAL's WaitForStuffThatNeedsPreview() -> preview requested.
+
+What still fails is the front sensor's capture path after a rear session:
+`imx132_set_mode` and `[imx132]: stream on.` appear in dmesg, but the VI/CSI
+produces no frames (`Camera Timeout: Sync Point ID: 15` / `csi_vi_0`,
+`AlterSyncPointStatus failed`), so the preview shows black and then
+uninitialised (green) buffers and Snap dies.  The same front sensor streams
+correctly when it is the first session of a provider process.
+
+Things already tried and their outcome (do not repeat blindly):
+- unloading the vendor module in-process: the linker keeps it mapped, no effect;
+- restarting the provider after each close: gives the front a working stream
+  (first-session state) but races the framework - Snap logs
+  "setPreviewDisplay failed, surface is destoried" and closes the camera;
+- closing the leaked descriptors + retrying the vendor open: the open and the
+  parameter exchange succeed, the stream still does not;
+- async set_parameters: removes the framework deadlock (verified), but does not
+  make the CSI deliver frames.
+
+Next ideas, in order:
+1. Find out why the HAL does not reprogram the CSI for the second sensor.  It
+   is not the kernel (the tegra_camera power/clocks are re-initialised on
+   every open and the sensor is streaming); it is the VI/CSI routing inside
+   the blob.  Instrumenting nvhost (command stream / syncpoint) or comparing
+   the first-session and switch command buffers would show what is skipped.
+2. Or: make the camera app survive the provider restart (the framework's
+   surface race) - e.g. keep the preview surface alive across the switch - and
+   use the restart path, which is known to give a working front stream.
+
 ## Next steps
 
 1. Camera: flash the build with the provider-restart + openSession retry and
