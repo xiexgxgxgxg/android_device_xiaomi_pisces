@@ -501,6 +501,38 @@ static char *camera_get_parameters(struct camera_device *device)
     char *params = VENDOR_CALL(device, get_parameters);
     char *fixed_params = camera_fixup_getparams(toWrapper(device), params);
     VENDOR_CALL(device, put_parameters, params);
+
+    /*
+     * pisces: after a provider restart (the wrapper kills the provider on
+     * every close so the next session starts from clean HAL state) the first
+     * get_parameters() can race the HAL's initialisation and come back empty.
+     * Snap then dies with "getParameters failed (empty parameters)" right
+     * after a rear<->front switch.  Fall back to the parameter blob captured
+     * from a working session (the same file the camera service uses for the
+     * legacy shim) instead of handing the framework an empty string.
+     */
+    if (fixed_params == NULL || fixed_params[0] == '\0') {
+        static char *cached_params = NULL;
+        if (cached_params == NULL) {
+            FILE *f = fopen("/data/misc/cameraserver/pisces_shim_params.txt", "re");
+            if (f != NULL) {
+                static char buf[4096];
+                size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+                fclose(f);
+                if (n > 0) {
+                    buf[n] = '\0';
+                    cached_params = strdup(buf);
+                }
+            }
+        }
+        if (cached_params != NULL && cached_params[0] != '\0') {
+            ALOGW("vendor returned empty parameters, using the cached blob");
+            if (fixed_params != NULL) {
+                free(fixed_params);
+            }
+            return strdup(cached_params);
+        }
+    }
     return fixed_params;
 }
 
@@ -594,22 +626,15 @@ static int camera_device_close(hw_device_t *device)
     unloadVendorModule();
 
     /*
-     * The vendor HAL keeps module-global state (focus motor "NvFmInitialize:
-     * Failed already initialized", NvMM block container, VI/CSI bookkeeping)
-     * that its close path does not reset, so the second camera session in this
-     * process - a reopen or a rear<->front switch - failed with 0xd and a
-     * green preview.  Unloading the module is not enough (the linker keeps it
-     * mapped), so restart the whole provider: fork a tiny shell that kills us
-     * right after this close returns; init starts the service again and the
-     * camera service retries the next open until the fresh provider is up.
+     * The vendor HAL tears its module-global state down asynchronously (focus
+     * motor "NvFmInitialize: Failed already initialized", NvMM block
+     * container, VI/CSI bookkeeping): the next camera open in this process
+     * raced that teardown and failed with 0xd (green preview when switching to
+     * the front sensor).  Give the teardown a moment before returning the
+     * close to the framework - the app's next open then starts from a clean
+     * HAL state without having to restart the whole provider.
      */
-    {
-        pid_t child = fork();
-        if (child == 0) {
-            execl("/system/bin/sh", "sh", "-c", "sleep 0.15; kill -9 $PPID", (char *)NULL);
-            _exit(0);
-        }
-    }
+    usleep(400000);
     if (wrapper_dev->base.ops)
         delete wrapper_dev->base.ops;
     delete wrapper_dev;
