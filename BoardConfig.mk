@@ -180,3 +180,12 @@ BOARD_KERNEL_CMDLINE += loglevel=8 ignore_loglevel keep_bootcon
 
 # HIDL device manifest
 DEVICE_MANIFEST_FILE := device/xiaomi/pisces/manifest.xml
+
+# frameworks/av overlay: the camera service changes live in this device tree
+# (av-overlay/) and are copied over the upstream sources at configure time, so
+# a plain "repo sync" followed by a build still produces our ROM.
+PISCES_AV_OVERLAY := $(LOCAL_PATH)/av-overlay
+PISCES_AV_OVERLAY_COPIED := $(shell $(PISCES_AV_OVERLAY)/apply.sh $(TOPDIR))
+ifneq ($(strip $(PISCES_AV_OVERLAY_COPIED)),)
+$(warning $(PISCES_AV_OVERLAY_COPIED))
+endif

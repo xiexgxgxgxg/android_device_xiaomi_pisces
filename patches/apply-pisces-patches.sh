@@ -38,7 +38,11 @@ apply 0026-gralloc-free-local-alloc.patch           frameworks/native
 # changes on every sync, so they are informational: try them, skip if present.
 patch -p1 -d "$ROOT" --forward --batch -i "$P/0027-camera-wrapper-a9-headers.patch" >/dev/null 2>&1 \
     || echo "0027 already in hardware/nvidia, skipped"
-apply 0028-frameworks-av-camera-provider-restart.patch frameworks/av
+# 0028 is applied automatically at configure time by av-overlay/ (see
+# BoardConfig.mk), so this is only a fallback; skip it when already applied.
+patch -p1 -d "$ROOT/frameworks/av" --forward --batch \
+    -i "$P/0028-frameworks-av-camera-provider-restart.patch" >/dev/null 2>&1 \
+    || echo "0028 already applied by av-overlay, skipped"
 apply 0029-system-core-init-charger-mode.patch     system/core
 # 0028-0039 record the work that had been left uncommitted in the tree
 # (camera provider restart, charger mode, dual-provider camera HIDL, and the
