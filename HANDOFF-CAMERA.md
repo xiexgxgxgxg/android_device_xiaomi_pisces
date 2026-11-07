@@ -481,3 +481,28 @@ Snap 拍出来是全黑（211851 字节、avg=1），测试 App 拍出来是正�
   （`overlay/packages/apps/Snap/res/values/config.xml`），避免默认拍出全黑；
 - 真正的修复要查 max77665 flash 这条路径（`/sys/class/leds/flashlight` 存在、
   `CONFIG_MAX77665_FLASH=y`，但 HAL 在 flash != off 时的预闪/曝光时序会拿到空帧）。
+
+### 15.3 闪光灯路径的初步排查（照片全黑的修复方向）
+
+- 闪光灯芯片是 **max77665**，驱动在 `drivers/media/video/tegra/max77665-flash.c`
+  （`CONFIG_MAX77665_FLASH=y`）。它注册了两个接口：
+  - misc 设备（`/dev/max77665_f`，`max77665_f_fileops`，供 NVIDIA camera 栈用）；
+  - LED classdev `/sys/class/leds/flashlight`（`spotlight_brightness_set`）。
+- 现场检查：`/sys/class/leds/flashlight` 存在且 `max_brightness=255`，但
+  **`/proc/misc` 里没有 max77665 的 misc 设备**，`/dev/max77665_f` 也不存在。
+- `camera.tegra.so` 的字符串里只有 `/dev/video0`、`/dev/video1`，没有 max77665 或
+  flash 设备路径 → HAL 的闪光控制应该走 V4L2（`V4L2_CID_FLASH_*`）而不是 misc 设备。
+- 而我们的 `max77665-flash.c` **没有注册 v4l2_subdev**（只有 misc + LED），
+  这与“flash != off 时 HAL 拿不到帧”高度吻合：HAL 打不开/控制不了闪光子设备，
+  预闪流程失败，still buffer 为空。
+
+下一步：
+1. 重启后确认 `/proc/misc` 是否出现 flash 设备、dmesg 里有没有
+   “unable to register misc device”；
+2. 对比小米原厂内核（`/data/twrp/kernel/stock-src`）里同一个驱动，确认是不是我们
+   移植时把 v4l2_subdev 部分去掉/没编进去；
+3. 若确实缺 V4L2 接口，给 max77665-flash 补一个 v4l2_subdev（提供
+   `V4L2_CID_FLASH_LED_MODE` / `V4L2_CID_FLASH_STROBE`），或者反汇编 HAL 确认它
+   到底走哪条路径。
+
+临时规避：设备 overlay 已把 Snap 默认闪光灯设为 off。
