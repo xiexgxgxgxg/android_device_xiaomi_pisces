@@ -201,8 +201,23 @@ LM3533[0x42] = 0xff   # 红灯亮度
 ```
 
 `lighttest hal 4 0xffff0000` / `lighttest hidl 4 0xffff0000` 也都能把红点亮到 255。
-锁屏（屏幕灭）后发带灯通知，`/sys/class/leds/red/brightness` 变 255；
-`screencap` 看过 Snap 界面，无异常。
+
+通知灯（LOCK SCREEN 后发带灯通知，用 `PiscesCamTest` 的 notify 模式，颜色依次
+红/绿/蓝/白）：
+
+```
+red=255 green=0    blue=0     → 红
+red=0   green=255  blue=0     → 绿
+red=0   green=0    blue=255   → 蓝
+red=255 green=255  blue=255   → 白
+```
+
+`dumpsys notification` 里也能看到 `Lights List` 有该通知。
+**注意**：AOSP 的 `NotificationRecord.calculateImportance()` 会把 targetSdk<26 且
+"不响不震"（`isNoisy=false`）的通知压到 `IMPORTANCE_LOW`，低于点灯阈值
+（`IMPORTANCE_DEFAULT`），所以测试通知必须带 `setVibrate()`/`setSound()`
+（或者 app 自己建 importance >= DEFAULT 的 channel）才会点灯。高优先级/带响铃的
+真实通知不受影响。
 
 ## 九、已知遗留（下次再做）
 
@@ -214,6 +229,11 @@ LM3533[0x42] = 0xff   # 红灯亮度
   `params_front.txt`）。
 - 关机充电（`chargeonlymode`）尚未验证；它也直接写 LED 节点，现在能亮了。
 - 每次切换重启 provider 的代价仍在（0.6–3 s），要再快只能把整个 HAL 会话搬到子进程里代理。
+- 通知灯和充电灯共用同一颗 RGB LED：通知熄灭后会把三个通道写 0，
+  充电灯要等下一次电池状态变化才会重新点亮（Lineage 通用行为）。
+- 测试期间见过一次 system_server 的 watchdog ANR dump
+  （`/data/anr/anr_2026-11-06-09-01-57-098`，所有线程都已恢复，无阻塞线程），
+  之后反复切换/点灯都没有复现。
 
 ## 十、历史背景（简）
 
