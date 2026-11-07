@@ -329,3 +329,73 @@ service charger /sbin/chargeonlymode
 - 单开驱动（imx135/ad5823/max77665-flash/tegra_camera）改成了引用计数
 - 参数按 sensor 缓存（`/data/misc/pisces_camera/params_<id>.txt`）
 - `.text` 是 **Thumb-2**（反汇编要加 `-M force-thumb`）
+
+## 十三、图形栈：composer 崩溃导致的"软重启"(2026-11-07)
+
+现象：user 构建刷入后，开机向导阶段偶发"软重启"（不是内核重启，是 zygote 重启），
+多次发⽣后系统卡死（`gralloc: GetBufferLock timed out`、watchdog dump、`dumpsys` 卡住）。
+
+根因（dropbox 里两份一模一样的 tombstone）：
+
+```
+pid 345/2669  android.hardware.graphics.composer@2.1-service
+signal 11 (SIGSEGV), fault addr 0xb6c30010
+    #00 NvGrUnregisterBuffer+26                     (gralloc.tegra.so)
+    #01 Gralloc0HalImpl<MapperHal>::freeBuffer
+    #02 MapperImpl<IMapper,MapperHal>::freeBuffer
+    #03 BsMapper::freeBuffer
+    #04 ComposerHandleCache::~ComposerHandleCache
+    #05 ComposerDisplayResource::removeLayer
+    #06 ComposerClientImpl::destroyLayer
+```
+
+链路：HWC 销毁带 buffer 的图层 → 对导入的句柄调 `freeBuffer` → `NvGrUnregisterBuffer`
+崩 → composer 死 → SurfaceFlinger 收不到 HWC 而 `SIGABRT` → `surfaceflinger.rc` 里
+`onrestart restart zygote` → **zygote 重启 = 看到的"软重启"**。
+
+反汇编说明：`NvGrUnregisterBuffer+26` 读 `handle+0x80`（`NvGrRegisterBuffer` 里
+`mmap` 出来的 fence 页指针）再解引用；页已经 munmap 过（重复反注册）或者这个副本
+从未在本进程注册过，就会踩到失效地址：
+
+```
+2440: ldr r3, [handle, #0x80]
+2446: ldr r0, [r3, #0x10]      <- SIGSEGV
+```
+
+Android 9 把 composer 拆成独立进程，句柄必须跨进程复制，2013 年的 nvgralloc 句柄
+（43 个私有 int）里含进程内指针，复制后这些指针在 composer 进程里无效。
+
+**修复（patch 0040）**：`Gralloc0Hal.h` 里维护一份"本进程已注册句柄"集合：
+- `importBuffer`：clone + `registerBuffer`（注册不能省，否则合成拿不到 buffer，会黑屏进不去向导），登记进集合；
+- `freeBuffer`：只对集合里的句柄 `unregisterBuffer`，重复 free 直接跳过并打
+  `pisces: duplicate freeBuffer(...)`，不再踩 NVIDIA 的失效指针。
+
+**验证方法**：刷入后在 `logcat` 里看
+`pisces: duplicate freeBuffer` / `pisces: import` / `pisces: free` 计数；
+没有 `composer@2.1-service ... Fatal signal 11`、`zygote` 的 `ELAPSED` 一直等于开机时长，
+就说明不再软重启。
+
+**教训**：不要试图省掉 `registerBuffer`（试过，直接黑屏进不去开机向导）；
+问题只在"反注册"这一步。
+
+## 十四、frameworks/av 改动已并入设备树（av-overlay）
+
+相机框架改动不再依赖 fork/补丁，而是放在
+`device/xiaomi/pisces/av-overlay/`（6 个文件，保持相对路径）：
+
+```
+services/camera/libcameraservice/CameraService.cpp
+services/camera/libcameraservice/common/CameraProviderManager.cpp
+services/camera/libcameraservice/CameraFlashlight.cpp
+services/camera/libcameraservice/api1/CameraClient.cpp
+media/libaudioprocessing/AudioResampler.cpp
+soundtrigger/SoundTrigger.cpp
+```
+
+`BoardConfig.mk` 末尾在 configure 阶段调用 `av-overlay/apply.sh $(TOPDIR)`，
+把内容不同的文件覆盖进 `frameworks/av`（幂等，`cmp` 相同就跳过），并用 `$(warning ...)`
+在构建日志里打印更新了哪些文件。验证方式：把 `frameworks/av` 切回上游 commit 后直接
+`mka bacon`，日志里会出现 `pisces: av-overlay: updated frameworks/av/...`，且编译通过。
+
+`patches/0028` 与 fork（`android_frameworks_av` 分支 `lineage-16.0-pisces`）保留作等价备份；
+`apply-pisces-patches.sh` 遇到已应用的 0028 会自动跳过。
