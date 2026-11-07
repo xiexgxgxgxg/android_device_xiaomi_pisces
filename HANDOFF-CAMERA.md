@@ -393,8 +393,8 @@ soundtrigger/SoundTrigger.cpp
 ```
 
 `BoardConfig.mk` 末尾在 configure 阶段调用 `av-overlay/apply.sh $(TOPDIR)`，
-把内容不同的文件覆盖进 `frameworks/av`（幂等，`cmp` 相同就跳过），并用 `$(warning ...)`
-在构建日志里打印更新了哪些文件。验证方式：把 `frameworks/av` 切回上游 commit 后直接
+把内容不同的文件覆盖进 `frameworks/av`（幂等，`cmp` 相同就跳过）。
+每次实际覆盖会追加到 `out/pisces-av-overlay.log`（kati 会把 `$(warning)` 吞掉，所以用文件记录）。验证方式：把 `frameworks/av` 切回上游 commit 后直接
 `mka bacon`，日志里会出现 `pisces: av-overlay: updated frameworks/av/...`，且编译通过。
 
 `patches/0028` 与 fork（`android_frameworks_av` 分支 `lineage-16.0-pisces`）保留作等价备份；

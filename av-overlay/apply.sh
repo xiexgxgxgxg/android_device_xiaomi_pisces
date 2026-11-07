@@ -27,6 +27,8 @@ while IFS= read -r f; do
         mkdir -p "$(dirname "$dst")"
         cp -f "$f" "$dst" || { echo "pisces: av-overlay: failed to update $rel" >&2; exit 1; }
         echo "pisces: av-overlay: updated frameworks/av/$rel"
+        printf '%s pisces: av-overlay: updated frameworks/av/%s\n' \
+            "$(date '+%Y-%m-%d %H:%M:%S')" "$rel" >> "$root/out/pisces-av-overlay.log" 2>/dev/null
         copied=$((copied + 1))
     fi
 done < <(find "$overlay" -type f ! -name 'apply.sh' ! -name 'README.md')
