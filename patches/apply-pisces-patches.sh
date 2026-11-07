@@ -78,4 +78,8 @@ apply 0043-frameworks-base-navbar-hwkeys.patch          frameworks/base
 # readable by the media provider and the gallery.
 apply 0044-frameworks-base-zygote-umask.patch          frameworks/base
 apply 0045-system-core-sdcard-bind-perms.patch         system/core
+# 0046: the legacy provider dies on every camera close, and a HIDL Return<> that
+# failed but was not checked aborts cameraserver (the black viewfinder + dead
+# camera session).  Check every call in CameraHardwareInterface instead.
+apply 0046-cameraserver-tolerate-dead-provider.patch    frameworks/av
 echo "all patches applied"

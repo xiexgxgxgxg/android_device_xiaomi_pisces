@@ -1,0 +1,302 @@
+diff --git a/services/camera/libcameraservice/device1/CameraHardwareInterface.cpp b/services/camera/libcameraservice/device1/CameraHardwareInterface.cpp
+index 498485430..bc27dfdf8 100644
+--- a/services/camera/libcameraservice/device1/CameraHardwareInterface.cpp
++++ b/services/camera/libcameraservice/device1/CameraHardwareInterface.cpp
+@@ -22,6 +22,30 @@
+ 
+ namespace android {
+ 
++// pisces: the legacy camera provider is torn down (and restarted) whenever a
++// client closes the camera, so a HIDL call can fail with DEAD_OBJECT at any
++// time.  Passing the failed Return<> to mapToStatusT() converts it to Status,
++// which trips return_status::assertOk() and aborts cameraserver - that is what
++// used to kill the whole camera session and leave the viewfinder black.
++// Report the failure to the caller instead.
++// pisces: same as above for the fire-and-forget HIDL calls; the Return<>
++// destructor aborts cameraserver when the call was not checked and failed.
++static void piscesCheckCall(const hardware::Return<void>& ret, const char* what) {
++    if (!ret.isOk()) {
++        ALOGE("%s: HIDL call failed: %s", what, ret.description().c_str());
++    }
++}
++
++static status_t piscesHidlStatus(
++        const hardware::Return<hardware::camera::common::V1_0::Status>& ret) {
++    if (!ret.isOk()) {
++        ALOGE("HIDL camera call failed: %s", ret.description().c_str());
++        return DEAD_OBJECT;
++    }
++    return CameraProviderManager::mapToStatusT(ret);
++}
++
++
+ using namespace hardware::camera::device::V1_0;
+ using namespace hardware::camera::common::V1_0;
+ using hardware::hidl_handle;
+@@ -30,7 +54,7 @@ CameraHardwareInterface::~CameraHardwareInterface()
+ {
+     ALOGI("Destroying camera %s", mName.string());
+     if (mHidlDevice != nullptr) {
+-        mHidlDevice->close();
++        piscesCheckCall(mHidlDevice->close(), "close");
+         mHidlDevice.clear();
+         cleanupCirculatingBuffers();
+     }
+@@ -473,8 +497,7 @@ status_t CameraHardwareInterface::setPreviewWindow(const sp<ANativeWindow>& buf)
+                 setPreviewTransform(mPreviewTransform);
+             }
+         }
+-        return CameraProviderManager::mapToStatusT(
+-                mHidlDevice->setPreviewWindow(buf.get() ? this : nullptr));
++        return piscesHidlStatus(mHidlDevice->setPreviewWindow(buf.get() ? this : nullptr));
+     }
+     return INVALID_OPERATION;
+ }
+@@ -498,7 +521,7 @@ void CameraHardwareInterface::enableMsgType(int32_t msgType)
+ {
+     ALOGV("%s(%s)", __FUNCTION__, mName.string());
+     if (CC_LIKELY(mHidlDevice != nullptr)) {
+-        mHidlDevice->enableMsgType(msgType);
++        piscesCheckCall(mHidlDevice->enableMsgType(msgType), "enableMsgType");
+     }
+ }
+ 
+@@ -506,7 +529,7 @@ void CameraHardwareInterface::disableMsgType(int32_t msgType)
+ {
+     ALOGV("%s(%s)", __FUNCTION__, mName.string());
+     if (CC_LIKELY(mHidlDevice != nullptr)) {
+-        mHidlDevice->disableMsgType(msgType);
++        piscesCheckCall(mHidlDevice->disableMsgType(msgType), "disableMsgType");
+     }
+ }
+ 
+@@ -514,7 +537,13 @@ int CameraHardwareInterface::msgTypeEnabled(int32_t msgType)
+ {
+     ALOGV("%s(%s)", __FUNCTION__, mName.string());
+     if (CC_LIKELY(mHidlDevice != nullptr)) {
+-        return mHidlDevice->msgTypeEnabled(msgType);
++        auto ret = mHidlDevice->msgTypeEnabled(msgType);
++        if (!ret.isOk()) {
++            ALOGE("%s: msgTypeEnabled failed: %s", __FUNCTION__,
++                    ret.description().c_str());
++            return false;
++        }
++        return (bool)ret;
+     }
+     return false;
+ }
+@@ -523,8 +552,7 @@ status_t CameraHardwareInterface::startPreview()
+ {
+     ALOGV("%s(%s)", __FUNCTION__, mName.string());
+     if (CC_LIKELY(mHidlDevice != nullptr)) {
+-        return CameraProviderManager::mapToStatusT(
+-                mHidlDevice->startPreview());
++        return piscesHidlStatus(mHidlDevice->startPreview());
+     }
+     return INVALID_OPERATION;
+ }
+@@ -533,7 +561,7 @@ void CameraHardwareInterface::stopPreview()
+ {
+     ALOGV("%s(%s)", __FUNCTION__, mName.string());
+     if (CC_LIKELY(mHidlDevice != nullptr)) {
+-        mHidlDevice->stopPreview();
++        piscesCheckCall(mHidlDevice->stopPreview(), "stopPreview");
+     }
+ }
+ 
+@@ -541,7 +569,13 @@ int CameraHardwareInterface::previewEnabled()
+ {
+     ALOGV("%s(%s)", __FUNCTION__, mName.string());
+     if (CC_LIKELY(mHidlDevice != nullptr)) {
+-        return mHidlDevice->previewEnabled();
++        auto ret = mHidlDevice->previewEnabled();
++        if (!ret.isOk()) {
++            ALOGE("%s: previewEnabled failed: %s", __FUNCTION__,
++                    ret.description().c_str());
++            return false;
++        }
++        return (bool)ret;
+     }
+     return false;
+ }
+@@ -550,8 +584,7 @@ status_t CameraHardwareInterface::storeMetaDataInBuffers(int enable)
+ {
+     ALOGV("%s(%s)", __FUNCTION__, mName.string());
+     if (CC_LIKELY(mHidlDevice != nullptr)) {
+-        return CameraProviderManager::mapToStatusT(
+-                mHidlDevice->storeMetaDataInBuffers(enable));
++        return piscesHidlStatus(mHidlDevice->storeMetaDataInBuffers(enable));
+     }
+     return enable ? INVALID_OPERATION: OK;
+ }
+@@ -560,8 +593,7 @@ status_t CameraHardwareInterface::startRecording()
+ {
+     ALOGV("%s(%s)", __FUNCTION__, mName.string());
+     if (CC_LIKELY(mHidlDevice != nullptr)) {
+-        return CameraProviderManager::mapToStatusT(
+-                mHidlDevice->startRecording());
++        return piscesHidlStatus(mHidlDevice->startRecording());
+     }
+     return INVALID_OPERATION;
+ }
+@@ -573,7 +605,7 @@ void CameraHardwareInterface::stopRecording()
+ {
+     ALOGV("%s(%s)", __FUNCTION__, mName.string());
+     if (CC_LIKELY(mHidlDevice != nullptr)) {
+-        mHidlDevice->stopRecording();
++        piscesCheckCall(mHidlDevice->stopRecording(), "stopRecording");
+     }
+ }
+ 
+@@ -584,7 +616,13 @@ int CameraHardwareInterface::recordingEnabled()
+ {
+     ALOGV("%s(%s)", __FUNCTION__, mName.string());
+     if (CC_LIKELY(mHidlDevice != nullptr)) {
+-        return mHidlDevice->recordingEnabled();
++        auto ret = mHidlDevice->recordingEnabled();
++        if (!ret.isOk()) {
++            ALOGE("%s: recordingEnabled failed: %s", __FUNCTION__,
++                    ret.description().c_str());
++            return false;
++        }
++        return (bool)ret;
+     }
+     return false;
+ }
+@@ -604,14 +642,15 @@ void CameraHardwareInterface::releaseRecordingFrame(const sp<IMemory>& mem)
+                 // Caching the handle here because md->pHandle will be subject to HAL's edit
+                 native_handle_t* nh = md->pHandle;
+                 hidl_handle frame = nh;
+-                mHidlDevice->releaseRecordingFrameHandle(heapId, bufferIndex, frame);
++                piscesCheckCall(mHidlDevice->releaseRecordingFrameHandle(heapId, bufferIndex, frame), "releaseRecordingFrameHandle");
+                 native_handle_close(nh);
+                 native_handle_delete(nh);
+             } else {
+-                mHidlDevice->releaseRecordingFrame(heapId, bufferIndex);
++                piscesCheckCall(mHidlDevice->releaseRecordingFrame(heapId, bufferIndex), "releaseRecordingFrame");
+             }
+         } else {
+-            mHidlDevice->releaseRecordingFrame(heapId, bufferIndex);
++            piscesCheckCall(mHidlDevice->releaseRecordingFrame(heapId, bufferIndex),
++                    "releaseRecordingFrame");
+         }
+     }
+ }
+@@ -642,7 +681,7 @@ void CameraHardwareInterface::releaseRecordingFrameBatch(const std::vector<sp<IM
+         }
+     }
+ 
+-    mHidlDevice->releaseRecordingFrameHandleBatch(msgs);
++    piscesCheckCall(mHidlDevice->releaseRecordingFrameHandleBatch(msgs), "releaseRecordingFrameHandleBatch");
+ 
+     for (auto& msg : msgs) {
+         native_handle_t* nh = const_cast<native_handle_t*>(msg.frameData.getNativeHandle());
+@@ -655,8 +694,7 @@ status_t CameraHardwareInterface::autoFocus()
+ {
+     ALOGV("%s(%s)", __FUNCTION__, mName.string());
+     if (CC_LIKELY(mHidlDevice != nullptr)) {
+-        return CameraProviderManager::mapToStatusT(
+-                mHidlDevice->autoFocus());
++        return piscesHidlStatus(mHidlDevice->autoFocus());
+     }
+     return INVALID_OPERATION;
+ }
+@@ -665,8 +703,7 @@ status_t CameraHardwareInterface::cancelAutoFocus()
+ {
+     ALOGV("%s(%s)", __FUNCTION__, mName.string());
+     if (CC_LIKELY(mHidlDevice != nullptr)) {
+-        return CameraProviderManager::mapToStatusT(
+-                mHidlDevice->cancelAutoFocus());
++        return piscesHidlStatus(mHidlDevice->cancelAutoFocus());
+     }
+     return INVALID_OPERATION;
+ }
+@@ -675,8 +712,7 @@ status_t CameraHardwareInterface::takePicture()
+ {
+     ALOGV("%s(%s)", __FUNCTION__, mName.string());
+     if (CC_LIKELY(mHidlDevice != nullptr)) {
+-        return CameraProviderManager::mapToStatusT(
+-                mHidlDevice->takePicture());
++        return piscesHidlStatus(mHidlDevice->takePicture());
+     }
+     return INVALID_OPERATION;
+ }
+@@ -685,8 +721,7 @@ status_t CameraHardwareInterface::cancelPicture()
+ {
+     ALOGV("%s(%s)", __FUNCTION__, mName.string());
+     if (CC_LIKELY(mHidlDevice != nullptr)) {
+-        return CameraProviderManager::mapToStatusT(
+-                mHidlDevice->cancelPicture());
++        return piscesHidlStatus(mHidlDevice->cancelPicture());
+     }
+     return INVALID_OPERATION;
+ }
+@@ -695,8 +730,19 @@ status_t CameraHardwareInterface::setParameters(const CameraParameters &params)
+ {
+     ALOGV("%s(%s)", __FUNCTION__, mName.string());
+     if (CC_LIKELY(mHidlDevice != nullptr)) {
+-        return CameraProviderManager::mapToStatusT(
+-                mHidlDevice->setParameters(params.flatten().string()));
++        // pisces: the legacy camera provider is restarted on every close (the
++        // 2013 HAL cannot be torn down cleanly), so a HIDL call can hit a dead
++        // object at any time.  Converting the failed Return<> to Status aborts
++        // cameraserver ("Attempted to retrieve value from failed HIDL call"),
++        // which used to leave the camera viewfinder black and killed the app's
++        // session.  Report the error to the caller instead.
++        auto ret = mHidlDevice->setParameters(params.flatten().string());
++        if (!ret.isOk()) {
++            ALOGE("%s: setParameters failed: %s", __FUNCTION__,
++                    ret.description().c_str());
++            return DEAD_OBJECT;
++        }
++        return CameraProviderManager::mapToStatusT(ret);
+     }
+     return INVALID_OPERATION;
+ }
+@@ -707,10 +753,14 @@ CameraParameters CameraHardwareInterface::getParameters() const
+     CameraParameters parms;
+     if (CC_LIKELY(mHidlDevice != nullptr)) {
+         hardware::hidl_string outParam;
+-        mHidlDevice->getParameters(
++        auto ret = mHidlDevice->getParameters(
+                 [&outParam](const auto& outStr) {
+                     outParam = outStr;
+                 });
++        if (!ret.isOk()) {
++            ALOGE("%s: getParameters failed: %s", __FUNCTION__,
++                    ret.description().c_str());
++        }
+         String8 tmp(outParam.c_str());
+         parms.unflatten(tmp);
+     }
+@@ -721,8 +771,7 @@ status_t CameraHardwareInterface::sendCommand(int32_t cmd, int32_t arg1, int32_t
+ {
+     ALOGV("%s(%s)", __FUNCTION__, mName.string());
+     if (CC_LIKELY(mHidlDevice != nullptr)) {
+-        return CameraProviderManager::mapToStatusT(
+-                mHidlDevice->sendCommand((CommandType) cmd, arg1, arg2));
++        return piscesHidlStatus(mHidlDevice->sendCommand((CommandType) cmd, arg1, arg2));
+     }
+     return INVALID_OPERATION;
+ }
+@@ -734,7 +783,7 @@ status_t CameraHardwareInterface::sendCommand(int32_t cmd, int32_t arg1, int32_t
+ void CameraHardwareInterface::release() {
+     ALOGV("%s(%s)", __FUNCTION__, mName.string());
+     if (CC_LIKELY(mHidlDevice != nullptr)) {
+-        mHidlDevice->close();
++        piscesCheckCall(mHidlDevice->close(), "close");
+         mHidlDevice.clear();
+     }
+ }
+@@ -748,9 +797,9 @@ status_t CameraHardwareInterface::dump(int fd, const Vector<String16>& /*args*/)
+     if (CC_LIKELY(mHidlDevice != nullptr)) {
+         native_handle_t* handle = native_handle_create(1,0);
+         handle->data[0] = fd;
+-        Status s = mHidlDevice->dumpState(handle);
++        auto ret = mHidlDevice->dumpState(handle);
+         native_handle_delete(handle);
+-        return CameraProviderManager::mapToStatusT(s);
++        return piscesHidlStatus(ret);
+     }
+     return OK; // It's fine if the HAL doesn't implement dump()
+ }
