@@ -1,8 +1,8 @@
-# Xiaomi Mi 3 TD (pisces) LineageOS 16.0 — 相机收尾交接
+# Xiaomi Mi 3 TD (pisces) LineageOS 16.0 — 相机 / 呼吸灯收尾交接
 
-> 交接时间：2026-11-07 凌晨
+> 交接时间：2026-11-07 凌晨（第二次收尾）
 > 设备序列号：095ac70c（adb 需 `adb -s 095ac70c`）
-> 当前版本：build50（关机充电修复 + 双 provider 相机）
+> 当前版本：build52（相机快速切换修复 + 呼吸灯修复）
 > 仓库全部已推送，分支 `lineage-16.0`
 
 ---
@@ -13,7 +13,9 @@
 |---|---|
 | 后摄（IMX135 13MP）预览/对焦/拍照/手电筒 | ✅ 完全可用 |
 | 前摄（IMX132 2MP）预览/拍照 | ✅ 可用 |
-| **后摄↔前摄切换** | ✅ 可用（双 provider 架构） |
+| 后摄↔前摄切换 | ✅ 可用（双 provider 架构） |
+| **快速反复切换（30 次以上）** | ✅ 不再出现"无法连接相机" |
+| **呼吸灯（充电 / 通知）** | ✅ 已点亮（LM3533，见第八节） |
 | 前摄方向 | ✅ 270°（不再上下颠倒） |
 | 耳机（识别 + 路由） | ✅ |
 | 振动 | ✅ |
@@ -39,38 +41,60 @@ legacy/1  PISCES_CAM_ROLE=front  PISCES_CAM_ID_BASE=1  →  相机 id 1（前摄
 init 里对应两个 service（`vendor.camera-provider-2-4` 和 `vendor.camera-provider-2-4-front`），
 环境变量在 `device/xiaomi/pisces/ramdisk/init.pisces.rc`。
 
-## 三、待修复问题：快速连续切换会卡死
+## 三、已解决：快速连续切换会卡死（"无法连接相机"）
 
-**现象**：一切换成功就立刻继续切换，切换次数多了会触发卡住，然后提示"无法连接相机"。
+### 根因（本次定位）
 
-**已定位的原因（需要优化）**：
+1. **厂商 HAL 的 close 路径本身是坏的**：`camera_device_close()` 里调用
+   `vendor->common.close()` 后，blob 的工作线程会在几百毫秒后解引用已释放的函数指针，
+   provider 进程必定 SIGSEGV（`Fault addr 0x6e8c`，回溯落在 `libnvmm_camera.so+0x12b35`）。
+   同时这条 close 路径会阻塞数秒（blob 等在自已的 teardown 超时上）。
+2. **provider 进程一死，相机就从框架里消失**：`CameraProviderManager::removeProvider()`
+   对死掉的 provider 的所有设备发 `NOT_PRESENT`，CameraService 直接 `removeStates()`，
+   App 的 `CameraManager` 收到 `onStatusChanged(NOT_PRESENT)` 后把该 id 从缓存里删掉。
+   于是"切换 → 相机消失 → 立刻再切"就会抛
+   `IllegalArgumentException: Unknown camera ID` / `CameraAccessException`，
+   即用户看到的"无法连接相机"。
+3. 因为 close 慢，Camera1 API 的 `Camera.release()` 是同步的（Snap 用的是 Camera1），
+   连续切换时主线程被卡住超过 5 s，触发 **"相机没有响应" ANR**。
 
-1. **每次打开相机的耗时较长**（HAL 的 `setupHalInLock` + FM 守卫重试）。
-   wrapper 里已有重试逻辑（4×150ms），但仍是秒级。
-2. **相机服务的 `connectHelper` 在持有 `mServiceLock` 的情况下等待 HAL 打开**。
-   而 App 启动时 `CameraApp.onCreate → CameraManager.getCameraIdList() → ICameraService.addListener`
-   需要同一把锁 → App UI 被阻塞 → 全黑屏、没有拍照界面。这个已经从 App 线程栈确认：
+### 修复（三处，互相配合）
 
-   ```
-   at android.os.BinderProxy.transact
-   at android.hardware.ICameraService$Stub$Proxy.addListener
-   at android.hardware.camera2.CameraManager$CameraManagerGlobal.connectCameraServiceLocked
-   ```
+1. `hardware/nvidia/pisces/camera/CameraWrapper.cpp`
+   - **默认（`persist.pisces.camkill=1`）在 close 的最前面 fork 一个子进程
+     `kill -9 $PPID` 杀掉 provider，并立刻返回**：app 的 release/close 变成毫秒级，
+     不再 ANR；不做损坏的 teardown，也就不再有 SIGSEGV（验证时 30 次切换 0 次崩溃）。
+     内核在进程退出时释放 sensor / VI / ISP 的 fd，init 立刻重启 provider。
+   - `camera_release()` 在这种模式下直接返回（vendor 的 release 也会阻塞）。
+   - close 里的 `unloadVendorModule()` / `closeLeakedVendorFds()` 保留给
+     `camkill=0` 的旧路径（属性开关，方便 A/B）。
+2. `frameworks/av/services/camera/libcameraservice/common/CameraProviderManager.cpp`
+   - `removeProvider()` **不再把死亡 provider 的设备标记成 NOT_PRESENT**：
+     pisces 只有两颗内置摄像头、id 固定，设备保持"在场"，重启后的 provider 会重新
+     announce 一次（"same status" 的告警无害）。App 的相机列表因此不再抖动。
+3. `frameworks/av/services/camera/libcameraservice/CameraService.cpp`
+   - `connectHelper()` 在设备暂时不在任何 provider 里时**等 provider 重启**
+     （最多 30×100 ms，等待期间 `mServiceLock` 是放开的，addListener 不会跟着卡死）。
+   - `getDeviceVersion()` 同样带等待：App 的 `CameraManager.openCamera()` 会同步调用
+     `supportsCameraApi()`，provider 重启窗口里原先直接报 "Unknown camera ID"。
 
-3. **FM 守卫**：`libnvmm_camera.so 0x380e8` 是一个静态指针守卫，返回 0xd。
-   同一 provider 第二次打开时会命中它（`NvFmInitialize: Failed already initialized`），
-   需要重试才能成功。这是"第二次切换开始变慢"的直接原因。
+4. `hardware/nvidia/pisces/shims/camshim.cpp`
+   - 每个会话一份私有 `libnvmm_camera.so` 副本（改 SONAME、`__android_dlopen_ext`
+     和普通 `dlopen` 都重定向）：让**同一个 provider 进程内**第二次开相机也能成功
+     （否则撞 FM 守卫 `NvFmInitialize: Failed already initialized` → 0xd）。
+   - 现在默认走"杀进程"路径，进程本来就是新的，副本默认关闭
+     （`persist.pisces.campriv` 可强制打开；camkill=0 时默认打开），
+     不再每次开关相机往 /data 写 1 MB。
 
-**优化方向（按优先级）**：
+### 验证
 
-- A. 缩短 HAL 打开时间：调 wrapper 的重试参数 / 关闭宽限期（当前 150ms）
-- B. 减少 FM 守卫触发：让关闭后的异步清理在下次打开前完成
-- C. 框架层：让 `CameraService::connectHelper` 不要在持 `mServiceLock` 时等 HAL 打开
-  （`frameworks/av/services/camera/libcameraservice/CameraService.cpp`，风险较高，放最后）
-- D. 如果"无法连接相机"是 cameraserver 崩溃：注意 provider 意外死亡时，
-  `CameraHardwareInterface::getParameters()` 会因 HIDL `DEAD_OBJECT` 触发
-  `HidlStatus: Failed HIDL return status not checked` 断言，直接 abort cameraserver。
-  需要给该路径加状态检查。
+- `PiscesCamTest`（内置测试 app，见第四节）连续 30 次前后切换（每次间隔 0.1 s），
+  每次开相机 + 建会话 + 抓一帧 JPEG：**0 失败，前后摄都能出图**。
+- 真机 Snap：连点切换键 50 次以上（间隔 1.2 s），
+  `dumpsys media.camera` 里 CONNECT/DISCONNECT 交替出现、**没有 REMOVE/ADD**，
+  无 ANR（`/data/anr` 没有新文件），之后拍照正常出图（`/sdcard/DCIM/Camera`）。
+- 代价：每次切换要重启 provider + 重新初始化 HAL，打开耗时约 0.6–3 s（旧实现更慢，
+  而且会卡死）。
 
 ## 四、调试工具（已内置）
 
@@ -79,25 +103,36 @@ init 里对应两个 service（`vendor.camera-provider-2-4` 和 `vendor.camera-p
 | `NvOsDbg` 日志 | `adb shell logcat -s NvOsDbg:D` | HAL 内部状态机全可见（camshim 拦截 `NvOsDebugPrintf`） |
 | `NvRmReg` | `logcat -s NvRmReg:D` | host1x 寄存器读写（mod 11=VI, 12=ISP） |
 | `persist.pisces.camswap` | `setprop persist.pisces.camswap 1` | 把相机 0 映射到前摄（单 provider 调试用） |
+| `persist.pisces.camkill` | 默认 1 | 1=close 时直接杀掉 provider（默认，快）；0=旧的进程内关闭路径 |
+| `persist.pisces.campriv` | 空=自动 | 1=强制每会话私有 NvMM 核心副本；0=用共享的 libnvmm_camera.so |
+| `PiscesCamTest` APK | `adb shell am start -n org.pisces.camtest/.MainActivity --es mode cam --ei count 30 --ei gap 100 --ez frames true` | 相机切换压测（逐次打 ITER/CAMTEST 日志）；`--es mode notify` 发带灯的通知 |
+| `lighttest` | `lighttest hal\|hidl\|regs` | 直接驱动 lights HAL / 读 LM3533 寄存器 |
 | 调用栈 | 拦截器对 ViCsi/already/syncpt 消息自动打 `CallStack` | 定位 blob 内部函数 |
 
 ## 五、关键文件
 
 | 路径 | 内容 |
 |---|---|
-| `hardware/nvidia/pisces/camera/CameraWrapper.cpp` | 相机 HAL wrapper（角色、参数缓存、异步 setParameters、fd 回收、open 重试） |
+| `hardware/nvidia/pisces/camera/CameraWrapper.cpp` | 相机 HAL wrapper（角色、参数缓存、异步 setParameters、fd 回收、open 重试、close 快速重启） |
+| `hardware/nvidia/pisces/shims/camshim.cpp` | ABI shim + 每会话私有 NvMM 核心 + NvOs 日志 |
 | `hardware/interfaces/camera/provider/2.4/default/service.cpp` | provider 实例名（env `PISCES_PROVIDER_INSTANCE`） |
 | `hardware/interfaces/camera/provider/2.4/default/CameraProvider.cpp` | 相机 id 偏移（env `PISCES_CAM_ID_BASE`）、状态表 |
 | `hardware/interfaces/camera/device/1.0/default/CameraDevice.cpp` | HIDL id → 模块 id 映射 |
+| `frameworks/av/services/camera/libcameraservice/CameraService.cpp` | connect/getDeviceVersion 等 provider 重启 |
+| `frameworks/av/services/camera/libcameraservice/common/CameraProviderManager.cpp` | provider 死亡不摘除设备 |
+| `device/xiaomi/pisces/overlay/lineage-sdk/lineage/res/res/values/config.xml` | 呼吸灯能力位（75） |
+| `device/xiaomi/pisces/overlay/frameworks/base/core/res/res/values/config.xml` | 充电灯颜色（红/红/绿） |
+| `kernel/xiaomi/pisces/drivers/leds/leds-lm3533.c` | LM3533 亮度写入修复 |
 | `device/xiaomi/pisces/ramdisk/init.pisces.rc` | 双 provider service、`on charger`、原厂充电逻辑 |
 | `device/xiaomi/pisces/device_pisces.mk` | `chargeonlymode` 等拷贝规则 |
+| `packages/apps/PiscesCamTest/` | 压测 APK + `lighttest`（本机工具，随系统编译） |
 
 ## 六、构建与刷入
 
 ```bash
-# 构建（整包，约 20-25 分钟）
+# 构建（整包，冷 20-25 分钟，增量 5-25 分钟）
 cd /data/twrp && nohup ./build-lineage.sh > /tmp/buildNN.out 2>&1 &
-# 日志：/data/lineage-16.0/build-logs/latest.log（末尾有 BUILD_RC=0 表示成功）
+# 日志：/data/lineage-16.0/build-logs/latest.log（末尾 BUILD_RC=0 表示成功）
 # 产物：/data/lineage-16.0/out/target/product/pisces/lineage_pisces-ota-eng.xie.zip
 
 # 刷入
@@ -105,35 +140,84 @@ adb -s 095ac70c push <zip> /sdcard/lineage.zip
 adb -s 095ac70c shell 'echo "install /sdcard/lineage.zip" > /cache/recovery/openrecoveryscript'
 adb -s 095ac70c reboot recovery
 
-# 只改 wrapper 时可免整包（快很多）：
-#   m camera.pisces && adb -s 095ac70c remount && adb -s 095ac70c push out/.../camera.pisces.so /system/lib/hw/
-#   然后重启两个 provider：
-#   adb shell 'setprop ctl.stop vendor.camera-provider-2-4; setprop ctl.stop vendor.camera-provider-2-4-front'
-#   adb shell 'setprop ctl.start vendor.camera-provider-2-4; setprop ctl.start vendor.camera-provider-2-4-front'
+# 只改 HAL / 框架库时可免整包（快很多）：
+#   m camera.pisces   && adb remount && adb push out/.../camera.pisces.so /system/lib/hw/
+#   m libcameraservice && adb remount && adb push out/.../libcameraservice.so /system/lib/ && setprop ctl.restart cameraserver
+#   改内核：mka bootimage，push boot.img 后
+#     adb shell 'dd if=/sdcard/boot.img of=/dev/block/platform/sdhci-tegra.3/by-name/LNX bs=4096'
+#   然后重启
+# 注意：/data 分区不支持 security xattr（内核没开 CONFIG_EXT4_FS_SECURITY），
+#       adb install 会失败；测试 APK 要 push 到 /system/app/<name>/ 再重启。
 ```
 
 ## 七、已排除的方向（不要重复）
 
 - 卸载 vendor 模块（dlclose 不生效，链接器保留映射）
 - 关闭 HAL 泄漏的 fd（`/dev/tegra_sema` **不能关**，那是同步点等待的信号量，关掉会刷 `syncpt semaphore failed 0x30003`）
-- 私有 `libnvmm_camera` 副本（加载第二份会因符号互相插入而 SIGSEGV）
-- provider 重启方案（能出图，但和框架的客户端重连竞态，会黑屏）
+- 私有 `libnvmm_camera` 副本（加载第二份会因符号互相插入而 SIGSEGV）——现在只在
+  进程内重开（camkill=0）时使用，且每会话一份、改 SONAME、不卸载
+- provider 重启方案（能出图，但和框架的客户端重连竞态，会黑屏）——本次用
+  "框架不摘设备 + connect 等 provider"补上了这个竞态
 - 直接寄存器编程（VI/ISP 只用 0x5c8 握手，真正配置走命令缓冲区）
 
-## 八、其它两个小问题
+## 八、呼吸灯（LM3533 三色 LED）
 
-**呼吸灯**：LM3533 三色 LED，`echo 255 > /sys/class/leds/red/brightness` 后回读恒为 0。
-背光正常说明 I2C 通。内核 `CONFIG_LEDS_TRIGGERS` 关闭（原厂也关）。
-另外原厂 `chargeonlymode` 也直接写这三个 LED 节点，如果关机充电验证成功，说明这些节点是可用的，
-那问题就在亮度写法/时序。
+### 之前为什么"不亮"
 
-**关机充电**：已按原厂逻辑接入（`/system/bin/chargeonlymode` + 原厂的 CPU 低功耗集群设置 +
-`class_start charger`）。注意原厂用的是 `chargeonlymode` 而不是 `healthd -c`。
+三层原因，缺一层都不亮：
 
-## 九、历史背景（简）
+1. **内核驱动吞掉了亮度写入**：`drivers/leds/leds-lm3533.c` 的 `lm3533_led_set()`
+   在 `patten_enabled`（板级数据给红/绿配了 650/200 ms 硬件闪烁）为真时**不调度
+   work**，于是 `echo 255 > /sys/class/leds/red/brightness` 回读恒为 0，
+   只有再写 `/sys/class/leds/red/update` 才会真正下发。原厂 `chargeonlymode`
+   在关机充电时就是直接写 brightness 节点 → 关机充电时灯永远不亮。
+2. **框架根本没把"有电池灯"告诉 Lineage**：`config_deviceLightCapabilities`
+   默认是 8（只有 pulsating），没有 `LIGHTS_BATTERY_LED`，
+   `LineageBatteryLights.isSupported()` 返回 false，BatteryService 直接不驱动充电灯；
+   通知灯也没有 `LIGHTS_RGB_NOTIFICATION_LED`，自定义颜色会被忽略。
+3. 充电灯颜色资源里 full 被设成 0（全灭）。
+
+### 修复
+
+1. `drivers/leds/leds-lm3533.c`：`lm3533_led_set()` 一律 `schedule_work(&led->work)`。
+   现在 `echo 255 > brightness` 立即生效（回读 255），`update` 节点仍然兼容。
+2. 新增 overlay `device/xiaomi/pisces/overlay/lineage-sdk/lineage/res/res/values/config.xml`：
+   `config_deviceLightCapabilities = 75`
+   （RGB 通知灯 1 + RGB 电池灯 2 + pulsating 8 + 电池灯 64）。
+   **注意 overlay 目录必须镜像模块的资源目录**（`lineage-sdk/lineage/res/res`），
+   写成包名 `lineageos.platform/` 不会被 soong 采纳。
+3. `overlay/frameworks/base/core/res/res/values/config.xml`：充电中红色、
+   充满绿色（原厂 MIUI 行为）。
+
+### 验证（寄存器级）
+
+充电中（`/sys/class/power_supply/max170xx_battery/status = Charging`）：
+
+```
+/sys/class/leds/red/brightness = 255        # 由 BatteryService 自己写，不是手动
+LM3533[0x27] = 0x3f   # 5 个 control bank 全开
+LM3533[0x28] = 0x01   # pattern 0（红灯）使能 → 650/200 ms 呼吸
+LM3533[0x42] = 0xff   # 红灯亮度
+```
+
+`lighttest hal 4 0xffff0000` / `lighttest hidl 4 0xffff0000` 也都能把红点亮到 255。
+锁屏（屏幕灭）后发带灯通知，`/sys/class/leds/red/brightness` 变 255；
+`screencap` 看过 Snap 界面，无异常。
+
+## 九、已知遗留（下次再做）
+
+- **参数缓存文件名冲突**：`CameraWrapper.cpp` 里 `cacheCameraParameters()` /
+  `camera_get_parameters()` 用 `CAMERA_ID(device)` 拼 `/data/misc/pisces_camera/params_%d.txt`，
+  双 provider 模式下两个实例的模块内 id 都是 0，后摄/前摄会互相覆盖同一个文件
+  （现在两个文件都是 2536 字节，就是前摄的参数）。只有厂商 HAL 返回空参数串时才会
+  用到这个缓存，所以目前没触发，但应该改成按角色分文件（`params_rear.txt` /
+  `params_front.txt`）。
+- 关机充电（`chargeonlymode`）尚未验证；它也直接写 LED 节点，现在能亮了。
+- 每次切换重启 provider 的代价仍在（0.6–3 s），要再快只能把整个 HAL 会话搬到子进程里代理。
+
+## 十、历史背景（简）
 
 - 相机死锁的根因是 camshim 的 `SensorEventQueue` 桩自递归编译成 `b .`（死循环）
 - 单开驱动（imx135/ad5823/max77665-flash/tegra_camera）改成了引用计数
 - 参数按 sensor 缓存（`/data/misc/pisces_camera/params_<id>.txt`）
 - `.text` 是 **Thumb-2**（反汇编要加 `-M force-thumb`）
-

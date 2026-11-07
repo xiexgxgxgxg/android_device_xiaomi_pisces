@@ -767,15 +767,27 @@ service vendor.camera-provider-2-4-front /vendor/bin/hw/android.hardware.camera.
     writepid /dev/cpuset/camera-daemon/tasks /dev/stune/top-app/tasks
 
 on charger
-    write /sys/class/backlight/lm3533-backlight0/brightness 100
-    write /sys/class/backlight/lm3533-backlight1/brightness 100
-    # used by adb
-    mount ext4 /dev/block/platform/sdhci-tegra.3/by-name/system /system
+    # pisces: stock MIUI logic (from its init.rc): keep the CPU in the low
+    # power cluster, disable the touch controller and let the vendor's
+    # chargeonlymode binary draw the charging animation and drive the RGB LED.
+    setprop sys.usb.config adb
+    write /sys/kernel/cluster/immediate 1
+    write /sys/kernel/cluster/force 1
+    write /sys/kernel/cluster/active lp
+    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor userspace
+    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_setspeed 51000
+    write /sys/class/input/input1/enabled 0
+    mount ext4 /dev/block/platform/sdhci-tegra.3/by-name/system /system wait ro barrier=1
+    class_start charger
 
-service charger /sbin/healthd -c
+# pisces: the stock charger UI is Xiaomi's static chargeonlymode binary (it
+# draws the battery animation on /dev/graphics/fb0 and drives the RGB LED
+# through the lm3533 sysfs nodes); healthd -c never worked on this device.
+service charger /system/bin/chargeonlymode
     class charger
     critical
-    seclabel u:r:healthd:s0
+    user root
+    group root
 
 # pisces: bluedroid_pm exposes the BCM43341 power switch as rfkill0 and it
 # comes up blocked, so the controller never answers on the UART.

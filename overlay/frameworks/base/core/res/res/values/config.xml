@@ -138,8 +138,12 @@
     <!-- Display low battery warning when battery level dips to this value -->
     <integer name="config_lowBatteryWarningLevel">10</integer>
 
-    <!-- Default value for led color when battery is fully charged -->
-    <integer name="config_notificationsBatteryFullARGB">0x00000000</integer>
+    <!-- Battery/charging LED colors of the LM3533 RGB LED: red while charging
+         (low and medium), green when the battery is full - the stock MIUI
+         behaviour. -->
+    <integer name="config_notificationsBatteryLowARGB">0xFFFF0000</integer>
+    <integer name="config_notificationsBatteryMediumARGB">0xFFFF0000</integer>
+    <integer name="config_notificationsBatteryFullARGB">0xFF00FF00</integer>
 
     <!-- Is the notification LED intrusive? Used to decide if there should be a disable option -->
     <bool name="config_intrusiveNotificationLed">true</bool>

@@ -65,6 +65,7 @@ TARGET_BOOTANIMATION_HALF_RES := true
 
 # init
 PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/ramdisk/chargeonlymode:system/bin/chargeonlymode \
     $(LOCAL_PATH)/ramdisk/adb_keys:root/adb_keys \
     $(LOCAL_PATH)/ramdisk/fstab.pisces:root/fstab.pisces \
     $(LOCAL_PATH)/ramdisk/fstab.zram_128:root/fstab.zram_128 \
