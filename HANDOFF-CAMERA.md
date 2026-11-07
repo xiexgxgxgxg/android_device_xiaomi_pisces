@@ -538,3 +538,39 @@ pisces: set_param id=7               (FLASH_LEVEL 再设一次)
 
 注意：kernel #222 目前带着上面这些调试打印（`pisces: ioctl` / `pisces: set_param`），
 验证完要清掉。
+
+## 十六、2026-11-08 凌晨：WiFi 信号强度已修好 / 相机后续
+
+### WiFi 信号强度（已修好）
+
+`WifiNative.signalPoll()` 走的是 **wificond**，不是 wpa_supplicant。wificond 的
+`NetlinkUtils::GetStationInfo()` 只认 32 位的 `NL80211_RATE_INFO_BITRATE32`，
+而 3.4 的 bcmdhd 只报 16 位 `NL80211_RATE_INFO_BITRATE`：
+
+```
+E wificond: Failed to get NL80211_RATE_INFO_BITRATE32
+```
+
+于是每次取 RSSI 都失败，框架回落到 `WifiInfo.INVALID_RSSI` = -127 dBm（图标永远最弱）。
+
+修法（patch 0048）：`GetStationInfo()` 在 BITRATE32 缺失时回退到 16 位值（单位相同，都是 100kbit/s）。
+
+验证：`RSSI: -29 dBm, Link speed: 65Mbps, score: 60`（顺手把链接速率单位也修正了）。
+
+### 相机本轮结论
+
+- 照片（闪光灯 off）：正常，1.4–1.6 MB。
+- 拍照后不再黑屏/App 不死：靠 patch 0046（cameraserver 的 HIDL 调用全部检查）。
+- 进入录像模式不再崩：`Camera.getCameraInfo()` 在 provider 重启期间会失败，
+  已加“等 provider 回来再重试”（CameraService::getCameraInfo）。
+- **录像仍不能录**：`MediaRecorder: start failed: -19`，框架只找到
+  `OMX.google.h264.encoder`（软件编码器）并报 `useBuffer ... BadParameter`。
+  `/system/vendor/bin/hw/android.hardware.media.omx@1.0-service` 在跑，manifest 里
+  也补了 `IOmx`/`IOmxStore`，但 nvomx 库都在 `/system/lib`（vendor 进程的 linker
+  namespace 看不到），所以 Nvidia 的硬件编解码器没被枚举。要真正修好需要把
+  `libnvomx*/libnvomxilclient` 及其依赖搬进 `/vendor/lib`，并按厂商组件写
+  `/vendor/etc/media_codecs.xml`。
+- **闪光灯仍未通**：HAL 只发 `NVC_PARAM_FLASH_LEVEL`/`TORCH_LEVEL`，从不发
+  `FLASH_PIN_STATE`（唯一会拉 strobe PBB4 的命令）；驱动侧补脉冲、
+  `imx135_pdata` 的 `flash_cap` 都试过，照片依旧全黑，需要进一步反汇编 HAL 的闪光路径。
+  目前设备 overlay 默认闪光灯 = off，避免拍出全黑照片。
