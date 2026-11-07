@@ -290,7 +290,7 @@ service charger /sbin/chargeonlymode
 - **设备树**：`github.com/xiexgxgxgxg/android_device_xiaomi_pisces`（分支 `lineage-16.0`，已推送）
 - **相机 HAL（wrapper + camshim）**：`github.com/xiexgxgxgxg/android_hardware_nvidia`（分支 `lineage-16.0`，已推送）
 - **frameworks/av（相机框架）已 fork 到我们自己的账号**：
-  `github.com/xiexgxgxgxg/android_frameworks_av`，分支 **`pisces-camera`**
+  `github.com/xiexgxgxgxg/android_frameworks_av`，分支 **`lineage-16.0-pisces`**
   （基于 lineage-16.0 + 相机 provider 重启容忍 + torch/参数缓存；README 里写明了这是
   为小米 3 TD `/mi3td` 相机问题改的）。用法（`.repo/local_manifests/pisces.xml`）：
 
@@ -298,7 +298,7 @@ service charger /sbin/chargeonlymode
   <manifest>
     <remove-project name="LineageOS/android_frameworks_av" />
     <project path="frameworks/av" name="xiexgxgxgxg/android_frameworks_av"
-             revision="pisces-camera" remote="github" />
+             revision="lineage-16.0-pisces" remote="github" />
   </manifest>
   ```
 
