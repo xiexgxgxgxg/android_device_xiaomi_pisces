@@ -67,4 +67,9 @@ apply 0040-gralloc0-no-unregister.patch            hardware/interfaces
 # with "Failed to restorecon session dir" / "INSTALL_FAILED_INSUFFICIENT_STORAGE".
 apply 0041-frameworks-base-selinux-restorecon.patch  frameworks/base
 apply 0042-frameworks-base-packageinstaller-restorecon.patch frameworks/base
+# 0043: Settings > System > Buttons -> "Enable on-screen nav bar" already adds
+# the software navigation bar (LineageSettings.System.FORCE_SHOW_NAVBAR), but the
+# capacitive menu/home/back keys kept working.  Swallow them while the switch is
+# on, so virtual keys and hardware keys are mutually exclusive.
+apply 0043-frameworks-base-navbar-hwkeys.patch          frameworks/base
 echo "all patches applied"

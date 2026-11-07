@@ -1,0 +1,43 @@
+diff --git a/services/core/java/com/android/server/policy/PhoneWindowManager.java b/services/core/java/com/android/server/policy/PhoneWindowManager.java
+index ef8fb37aa37..14c052f34d8 100644
+--- a/services/core/java/com/android/server/policy/PhoneWindowManager.java
++++ b/services/core/java/com/android/server/policy/PhoneWindowManager.java
+@@ -6613,6 +6613,23 @@ public class PhoneWindowManager implements WindowManagerPolicy {
+ 
+ 
+     /** {@inheritDoc} */
++    private static boolean isPiscesHardwareNavKey(int keyCode) {
++        switch (keyCode) {
++            case KeyEvent.KEYCODE_HOME:
++            case KeyEvent.KEYCODE_BACK:
++            case KeyEvent.KEYCODE_MENU:
++            case KeyEvent.KEYCODE_APP_SWITCH:
++                return true;
++            default:
++                return false;
++        }
++    }
++
++    private boolean isPiscesNavBarForced() {
++        return LineageSettings.System.getIntForUser(mContext.getContentResolver(),
++                LineageSettings.System.FORCE_SHOW_NAVBAR, 0, UserHandle.USER_CURRENT) != 0;
++    }
++
+     @Override
+     public int interceptKeyBeforeQueueing(KeyEvent event, int policyFlags) {
+         if (!mSystemBooted) {
+@@ -6627,6 +6644,14 @@ public class PhoneWindowManager implements WindowManagerPolicy {
+ 
+         final boolean isInjected = (policyFlags & WindowManagerPolicy.FLAG_INJECTED) != 0;
+ 
++        // pisces: when the on-screen navigation bar is forced on (Settings > System
++        // > Buttons -> "Enable on-screen nav bar"), the capacitive menu/home/back
++        // keys are redundant - swallow them so only the navigation bar is used.
++        // Turning the switch off brings the hardware keys back.
++        if (isPiscesHardwareNavKey(keyCode) && isPiscesNavBarForced()) {
++            return 0;
++        }
++
+         // If screen is off then we treat the case where the keyguard is open but hidden
+         // the same as if it were open and in front.
+         // This will prevent any keys other than the power button from waking the screen
