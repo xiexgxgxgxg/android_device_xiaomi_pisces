@@ -72,4 +72,10 @@ apply 0042-frameworks-base-packageinstaller-restorecon.patch frameworks/base
 # capacitive menu/home/back keys kept working.  Swallow them while the switch is
 # on, so virtual keys and hardware keys are mutually exclusive.
 apply 0043-frameworks-base-navbar-hwkeys.patch          frameworks/base
+# 0044/0045: without sdcardfs (3.4 kernel) the emulated storage is a plain bind
+# mount of /data/media.  Open the mount points up so apps can reach /sdcard, and
+# give app processes the classic 022 umask so the files they create stay
+# readable by the media provider and the gallery.
+apply 0044-frameworks-base-zygote-umask.patch          frameworks/base
+apply 0045-system-core-sdcard-bind-perms.patch         system/core
 echo "all patches applied"
