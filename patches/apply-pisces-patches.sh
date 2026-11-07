@@ -57,8 +57,8 @@ apply 0036-frameworks-base-tethering-usb.patch      frameworks/base
 apply 0037-rild-blocking.patch                      hardware/ril
 apply 0038-usbd-fixes.patch                         system/core
 apply 0039-vold-volume-manager.patch               system/vold
-# 0040: the composer service must not call gralloc registerBuffer/unregisterBuffer
-# on the cross-process copies of the 2013 nvgralloc handles (NvGrUnregisterBuffer
-# dereferences a process-local pointer and kills SurfaceFlinger -> soft reboot).
+# 0040: the composer service must not unregister a 2013 nvgralloc handle twice
+# (NvGrUnregisterBuffer dereferences a process-local pointer whose page was
+# already unmapped, killing SurfaceFlinger -> soft reboot).
 apply 0040-gralloc0-no-unregister.patch            hardware/interfaces
 echo "all patches applied"
