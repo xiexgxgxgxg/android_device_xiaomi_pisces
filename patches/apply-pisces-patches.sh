@@ -82,4 +82,8 @@ apply 0045-system-core-sdcard-bind-perms.patch         system/core
 # failed but was not checked aborts cameraserver (the black viewfinder + dead
 # camera session).  Check every call in CameraHardwareInterface instead.
 apply 0046-cameraserver-tolerate-dead-provider.patch    frameworks/av
+# 0048: the 3.4 bcmdhd driver only reports the 16-bit NL80211_RATE_INFO_BITRATE,
+# so wificond's GetStationInfo() always failed and WifiInfo kept
+# INVALID_RSSI (-127 dBm).  Fall back to the 16-bit rate.
+apply 0048-wificond-16bit-bitrate.patch                system/connectivity/wificond
 echo "all patches applied"

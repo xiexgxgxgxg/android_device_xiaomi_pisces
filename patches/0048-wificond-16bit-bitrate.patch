@@ -1,0 +1,45 @@
+diff --git a/client_interface_impl.cpp b/client_interface_impl.cpp
+index 2ea6871..818c479 100644
+--- a/client_interface_impl.cpp
++++ b/client_interface_impl.cpp
+@@ -197,8 +197,15 @@ bool ClientInterfaceImpl::SignalPoll(vector<int32_t>* out_signal_poll_results) {
+   if (!netlink_utils_->GetStationInfo(interface_index_,
+                                       bssid_,
+                                       &station_info)) {
++    char bssid_str[18];
++    snprintf(bssid_str, sizeof(bssid_str), "%02x:%02x:%02x:%02x:%02x:%02x",
++             bssid_[0], bssid_[1], bssid_[2], bssid_[3], bssid_[4], bssid_[5]);
++    LOG(INFO) << "pisces: GetStationInfo failed, bssid=" << bssid_str
++              << " ifindex=" << interface_index_;
+     return false;
+   }
++  LOG(INFO) << "pisces: signalPoll rssi=" << static_cast<int>(station_info.current_rssi)
++            << " bitrate=" << station_info.station_tx_bitrate;
+   out_signal_poll_results->push_back(
+       static_cast<int32_t>(station_info.current_rssi));
+   // Convert from 100kbit/s to Mbps.
+diff --git a/net/netlink_utils.cpp b/net/netlink_utils.cpp
+index adaa37e..6cee6e2 100644
+--- a/net/netlink_utils.cpp
++++ b/net/netlink_utils.cpp
+@@ -508,8 +508,18 @@ bool NetlinkUtils::GetStationInfo(uint32_t interface_index,
+   uint32_t tx_bitrate;
+   if (!tx_bitrate_attr.GetAttributeValue(NL80211_RATE_INFO_BITRATE32,
+                                          &tx_bitrate)) {
+-    LOG(ERROR) << "Failed to get NL80211_RATE_INFO_BITRATE32";
+-    return false;
++    // pisces: the 3.4-era bcmdhd driver only reports the 16-bit
++    // NL80211_RATE_INFO_BITRATE (in 100kbit/s), never the 32-bit variant, so
++    // requiring BITRATE32 made every GetStationInfo() fail and the framework
++    // fell back to WifiInfo.INVALID_RSSI (-127 dBm, "weakest possible" icon)
++    // even right next to the access point.
++    uint16_t tx_bitrate16;
++    if (!tx_bitrate_attr.GetAttributeValue(NL80211_RATE_INFO_BITRATE,
++                                           &tx_bitrate16)) {
++      LOG(ERROR) << "Failed to get NL80211_RATE_INFO_BITRATE32 and BITRATE";
++      return false;
++    }
++    tx_bitrate = static_cast<uint32_t>(tx_bitrate16);
+   }
+ 
+   *out_station_info = StationInfo(tx_good, tx_bad, tx_bitrate, current_rssi);
