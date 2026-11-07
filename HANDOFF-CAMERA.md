@@ -583,3 +583,37 @@ E wificond: Failed to get NL80211_RATE_INFO_BITRATE32
   开机后 `Fatal signal` 计数 0。
 - 未解决：闪光灯（HAL 不触发 strobe）、录像（vendor OMX 未生效，见第 16 节）。
 - 测试工具：`PiscesCamTest`（`--es mode photo --ez snap true --es idx <n>` 可复现参数组合）。
+
+### 16.2 第二天上午：相册灰图 + 闪光灯规避
+
+**相册全是灰色方块（已修好）**
+
+`/data/media/0/DCIM/Camera` 是 `drwx------ u0_a10`（Snap 建目录时给的 0700），
+相册（另一个 uid）连目录都进不去，只能显示灰色占位图。日志：
+
+```
+SinglePhotoDataAdapter: fail to get region decoder, try to request thumb image
+SinglePhotoDataAdapter: fail to decode thumb
+```
+
+修法（patch 0045 更新）：`sdcard` 守护进程在 bind mount 之后**递归**遍历存储树，
+目录改 0777、文件改 0666（跳过隐藏项和符号链接），每启动一次修一次：
+
+```
+I sdcard: pisces: storage tree relaxed, 9 entr(y/ies) fixed
+```
+
+验证：打开 `IMG_20261108_073355.jpg` 相册正常显示图像（截图确认），不再是灰块。
+
+**闪光灯规避（HAL 侧强制关闭）**
+
+既然 HAL 只会 arm 不会触发 strobe，就在我们自己的 `hardware/nvidia` 相机 wrapper 的
+`camera_fixup_setparams()` 里把 `flash-mode` 一律改成 `off`：
+
+```
+I CameraWrapper: camera_fixup_setparams: forcing flash-mode off (requested 'auto')
+```
+
+验证：Snap 设成“自动闪光灯”拍照 → 1.06 MB、平均亮度 99.2 的正常照片
+（以前是 211 KB 全黑）。这样“开不开闪光灯都一样能拍出正常照片”，代价是 LED 不会亮；
+真正的闪光灯修复（让 HAL 触发 strobe）仍待做。
