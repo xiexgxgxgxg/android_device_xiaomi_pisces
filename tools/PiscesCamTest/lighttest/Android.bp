@@ -1,0 +1,14 @@
+cc_binary {
+    name: "lighttest",
+    srcs: ["lighttest.cpp"],
+    shared_libs: [
+        "libhardware",
+        "liblog",
+        "libhidlbase",
+        "libhidltransport",
+        "android.hardware.light@2.0",
+        "libutils",
+    ],
+    cflags: ["-Wall", "-Wno-unused-parameter"],
+    compile_multilib: "32",
+}
