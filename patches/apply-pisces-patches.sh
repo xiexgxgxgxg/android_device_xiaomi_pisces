@@ -33,8 +33,11 @@ apply 0022-wifi-dataintegrity-keystore.patch        frameworks/opt/net/wifi
 # 0023-0025 were applied by hand (they touch several projects at once);
 # 0026 is the gralloc free path that goes with 0023.
 apply 0026-gralloc-free-local-alloc.patch           frameworks/native
-# 0027 targets hardware/nvidia, which is not a git project in this tree.
-patch -p1 -d "$ROOT" -i "$P/0027-camera-wrapper-a9-headers.patch"
+# 0025/0027 only touch hardware/nvidia, which is our own repository
+# (github.com/xiexgxgxgxg/android_hardware_nvidia) and already carries both
+# changes on every sync, so they are informational: try them, skip if present.
+patch -p1 -d "$ROOT" --forward --batch -i "$P/0027-camera-wrapper-a9-headers.patch" >/dev/null 2>&1 \
+    || echo "0027 already in hardware/nvidia, skipped"
 apply 0028-frameworks-av-camera-provider-restart.patch frameworks/av
 apply 0029-system-core-init-charger-mode.patch     system/core
 # 0028-0039 record the work that had been left uncommitted in the tree
