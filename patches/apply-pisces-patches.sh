@@ -86,4 +86,7 @@ apply 0046-cameraserver-tolerate-dead-provider.patch    frameworks/av
 # so wificond's GetStationInfo() always failed and WifiInfo kept
 # INVALID_RSSI (-127 dBm).  Fall back to the 16-bit rate.
 apply 0048-wificond-16bit-bitrate.patch                system/connectivity/wificond
+# 0047: CameraService::getCameraInfo() must wait for the restarted provider,
+# otherwise Snap crashes with "Fail to get camera info" when entering video mode.
+apply 0047-frameworks-av-camera-info-wait.patch         frameworks/av
 echo "all patches applied"

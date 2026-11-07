@@ -1,5 +1,5 @@
 diff --git a/sdcard/sdcard.cpp b/sdcard/sdcard.cpp
-index dc36596b1..aefd0ca3a 100644
+index dc36596b1..68dba1af4 100644
 --- a/sdcard/sdcard.cpp
 +++ b/sdcard/sdcard.cpp
 @@ -142,7 +142,7 @@ static bool sdcardfs_setup_bind_remount(const std::string& source_path, const st
@@ -11,7 +11,7 @@ index dc36596b1..aefd0ca3a 100644
                                       const std::string& dest_path, uid_t fsuid, gid_t fsgid,
                                       bool multi_user, userid_t userid, gid_t gid, mode_t mask,
                                       bool derive_gid, bool default_normal, bool use_esdfs) {
-@@ -154,6 +154,53 @@ static bool sdcardfs_setup_secondary(const std::string& default_path, const std:
+@@ -154,6 +154,89 @@ static bool sdcardfs_setup_secondary(const std::string& default_path, const std:
      }
  }
  
@@ -43,29 +43,65 @@ index dc36596b1..aefd0ca3a 100644
 +    return true;
 +}
 +
++// pisces: without sdcardfs the storage tree keeps the permissions the creating
++// app gave it (Snap creates DCIM/Camera with 0700), so the gallery cannot even
++// open the photos - they show up as gray rectangles.  Walk the tree once per
++// boot and make directories traversable/writable and files readable by every
++// app.  This gives up the per-app isolation sdcardfs would provide, but it is
++// the only way to make shared storage work on this kernel.
++static void relax_tree(const std::string& path, int depth, int* changed) {
++    DIR* dir = opendir(path.c_str());
++    if (dir == nullptr) {
++        return;
++    }
++    struct dirent* entry;
++    while ((entry = readdir(dir)) != nullptr) {
++        if (entry->d_name[0] == '.') {
++            continue;  // ".", ".." and hidden files are left alone
++        }
++        const std::string child = path + "/" + entry->d_name;
++        struct stat st;
++        if (lstat(child.c_str(), &st) != 0 || S_ISLNK(st.st_mode)) {
++            continue;
++        }
++        if (S_ISDIR(st.st_mode)) {
++            if (chmod(child.c_str(), 0777) != 0) {
++                PLOG(WARNING) << "chmod failed for " << child;
++            } else if ((st.st_mode & 0777) != 0777) {
++                *changed += 1;
++            }
++            if (depth < 8) {
++                relax_tree(child, depth + 1, changed);
++            }
++        } else if (S_ISREG(st.st_mode)) {
++            if ((st.st_mode & 0444) != 0444) {
++                if (chmod(child.c_str(), 0666) != 0) {
++                    PLOG(WARNING) << "chmod failed for " << child;
++                } else {
++                    *changed += 1;
++                }
++            }
++        }
++    }
++    closedir(dir);
++}
++
 +static void relax_emulated_storage(const std::string& source_path, userid_t userid) {
 +    // pisces: see setup_or_bind(); without sdcardfs the directories inside the
-+    // storage root have to be writable by every app or nothing can save.
++    // storage root have to be reachable by every app or nothing can be shared.
 +    const std::string root = source_path + "/" + std::to_string(userid);
 +    if (chmod(root.c_str(), 0777) != 0) {
 +        PLOG(WARNING) << "chmod failed for " << root;
 +    }
-+    static const char* kDirs[] = {
-+        "Alarms", "Android", "DCIM", "Documents", "Download", "Movies",
-+        "Music", "Notifications", "Pictures", "Podcasts", "Ringtones",
-+    };
-+    for (const char* dir : kDirs) {
-+        const std::string path = root + "/" + dir;
-+        if (chmod(path.c_str(), 0777) != 0) {
-+            PLOG(WARNING) << "chmod failed for " << path;
-+        }
-+    }
++    int changed = 0;
++    relax_tree(root, 0, &changed);
++    LOG(INFO) << "pisces: storage tree relaxed, " << changed << " entr(y/ies) fixed";
 +}
 +
  static void run_sdcardfs(const std::string& source_path, const std::string& label, uid_t uid,
                           gid_t gid, userid_t userid, bool multi_user, bool full_write,
                           bool derive_gid, bool default_normal, bool use_esdfs) {
-@@ -165,32 +212,37 @@ static void run_sdcardfs(const std::string& source_path, const std::string& labe
+@@ -165,32 +248,37 @@ static void run_sdcardfs(const std::string& source_path, const std::string& labe
      if (multi_user) {
          // Multi-user storage is fully isolated per user, so "other"
          // permissions are completely masked off.
@@ -119,7 +155,7 @@ index dc36596b1..aefd0ca3a 100644
      // Will abort if priv-dropping fails.
      drop_privs(uid, gid);
  
-@@ -199,6 +251,14 @@ static void run_sdcardfs(const std::string& source_path, const std::string& labe
+@@ -199,6 +287,14 @@ static void run_sdcardfs(const std::string& source_path, const std::string& labe
          fs_prepare_dir(obb_path.c_str(), 0775, uid, gid);
      }
  
