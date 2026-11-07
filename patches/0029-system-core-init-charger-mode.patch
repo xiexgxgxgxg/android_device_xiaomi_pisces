@@ -1,0 +1,22 @@
+diff --git a/init/init.cpp b/init/init.cpp
+index eb9dd755b..a1d8d72a8 100644
+--- a/init/init.cpp
++++ b/init/init.cpp
+@@ -744,7 +749,16 @@ int main(int argc, char** argv) {
+ 
+     // Don't mount filesystems or start core system services in charger mode.
+     std::string bootmode = GetProperty("ro.bootmode", "");
+-    if (bootmode == "charger") {
++    /*
++     * pisces: allow the charger UI to be brought up on demand, which makes it
++     * testable without powering the device off and plugging it in:
++     *   - add androidboot.forcecharger=1 to the boot image command line, or
++     *   - boot the boot image with that argument.
++     * On a real off-mode charging boot the bootloader already passes
++     * androidboot.mode=charger, so this is only a debugging aid.
++     */
++    if (bootmode == "charger" ||
++            GetProperty("ro.boot.forcecharger", "0") == "1") {
+         am.QueueEventTrigger("charger");
+     } else {
+         am.QueueEventTrigger("late-init");

@@ -21,7 +21,7 @@
 | 振动 | ✅ |
 | MTP 双向 | ✅ |
 | WiFi 热点 | ✅ |
-| 关机充电动画 | 🔄 已接入原厂 `chargeonlymode`，待验证 |
+| **关机充电动画** | ✅ 原厂 `chargeonlymode`（/sbin）正常出动画 |
 
 ## 二、相机架构（关键理解，务必先读）
 
@@ -124,7 +124,10 @@ init 里对应两个 service（`vendor.camera-provider-2-4` 和 `vendor.camera-p
 | `device/xiaomi/pisces/overlay/frameworks/base/core/res/res/values/config.xml` | 充电灯颜色（红/红/绿） |
 | `kernel/xiaomi/pisces/drivers/leds/leds-lm3533.c` | LM3533 亮度写入修复 |
 | `device/xiaomi/pisces/ramdisk/init.pisces.rc` | 双 provider service、`on charger`、原厂充电逻辑 |
-| `device/xiaomi/pisces/device_pisces.mk` | `chargeonlymode` 等拷贝规则 |
+| `device/xiaomi/pisces/device_pisces.mk` | `chargeonlymode`（root/sbin + system/bin）等拷贝规则 |
+| `patches/0028-frameworks-av-camera-provider-restart.patch` | camera service：provider 重启不摘设备 + 等 provider |
+| `patches/0029-system-core-init-charger-mode.patch` | init：`androidboot.forcecharger=1` 调试开关 |
+| `kernel-patches/files/leds-lm3533.c` | 内核 LM3533 亮度写入修复（内核不是 git 工程） |
 | `packages/apps/PiscesCamTest/` | 压测 APK + `lighttest`（本机工具，随系统编译） |
 
 ## 六、构建与刷入
@@ -219,7 +222,55 @@ red=255 green=255  blue=255   → 白
 （或者 app 自己建 importance >= DEFAULT 的 channel）才会点灯。高优先级/带响铃的
 真实通知不受影响。
 
-## 九、已知遗留（下次再做）
+## 九、关机充电（已修好）
+
+### 现象
+
+关机 + 插线，屏幕不出小米原厂的充电动画（之前被认为"关机充电不能用"）。
+
+### 根因
+
+对照原厂 MIUI 9 的 ramdisk（`pisces_images_V9.2.3.0.KXCCNEK` 里的 `boot.img`）：
+
+```
+# stock init.pisces.rc
+service charger /sbin/chargeonlymode
+    class charger
+```
+
+原厂的充电 UI 二进制放在**ramdisk 的 `/sbin`**，而且**没有 `critical`**。
+移植时放到了 `/system/bin/chargeonlymode` 并加了 `critical`：
+
+- charger 模式里 init 只跑 `on charger`，`/system` 要靠那行 `mount` 挂上；
+  `/sbin` 在 ramdisk 里，永远可用，原厂就是靠这一点。
+- `critical` 服务的语义是"退出就重启，反复退出就重启设备"，
+  充电 UI 一但退出就会把手机重启进系统，看起来就是"关机充电没用"。
+
+### 修复
+
+- `ramdisk/init.pisces.rc`：`service charger /sbin/chargeonlymode`，
+  去掉 `critical`，`on charger` 保持原厂那套（CPU 低耗集群、关触摸、mount /system、
+  `class_start charger`），并往 `/dev/kmsg` 打两行标记方便排查。
+- `device_pisces.mk`：`chargeonlymode` 同时拷到 `root/sbin/` 和 `system/bin/`。
+- `patches/0029-system-core-init-charger-mode.patch`：init 支持
+  `androidboot.forcecharger=1`（boot 命令行加这个参数即可进充电模式），
+  方便以后不拔插线也能验证充电 UI。
+
+### 验证
+
+- `init` 里加 `forcecharger` 开关后，重启直接进充电模式：原厂电池充电动画出现。
+- 真机（用户确认）：关机后拔插数据线，动画正常触发；
+  动画上的电量/配色正常（`chargeonlymode` 读 `max170xx_battery/capacity`，
+  三个 LED 节点现在也能真正写进去，见第八节）。
+
+### 注意
+
+- 进充电模式后 **没有 adb**（USB 只充电），排查只能靠 `/dev/kmsg` 标记、
+  或者把 `forcecharger` 的 boot.img 换回普通版本。
+- `chargeonlymode` 在充电模式里会把 `input1` 关掉、CPU 限制在低耗集群，
+  和原厂一致。
+
+## 十、已知遗留（下次再做）
 
 - **参数缓存文件名冲突**：`CameraWrapper.cpp` 里 `cacheCameraParameters()` /
   `camera_get_parameters()` 用 `CAMERA_ID(device)` 拼 `/data/misc/pisces_camera/params_%d.txt`，
@@ -227,7 +278,6 @@ red=255 green=255  blue=255   → 白
   （现在两个文件都是 2536 字节，就是前摄的参数）。只有厂商 HAL 返回空参数串时才会
   用到这个缓存，所以目前没触发，但应该改成按角色分文件（`params_rear.txt` /
   `params_front.txt`）。
-- 关机充电（`chargeonlymode`）尚未验证；它也直接写 LED 节点，现在能亮了。
 - 每次切换重启 provider 的代价仍在（0.6–3 s），要再快只能把整个 HAL 会话搬到子进程里代理。
 - 通知灯和充电灯共用同一颗 RGB LED：通知熄灭后会把三个通道写 0，
   充电灯要等下一次电池状态变化才会重新点亮（Lineage 通用行为）。

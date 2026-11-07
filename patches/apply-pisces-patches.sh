@@ -35,4 +35,6 @@ apply 0022-wifi-dataintegrity-keystore.patch        frameworks/opt/net/wifi
 apply 0026-gralloc-free-local-alloc.patch           frameworks/native
 # 0027 targets hardware/nvidia, which is not a git project in this tree.
 patch -p1 -d "$ROOT" -i "$P/0027-camera-wrapper-a9-headers.patch"
+apply 0028-frameworks-av-camera-provider-restart.patch frameworks/av
+apply 0029-system-core-init-charger-mode.patch     system/core
 echo "all patches applied"

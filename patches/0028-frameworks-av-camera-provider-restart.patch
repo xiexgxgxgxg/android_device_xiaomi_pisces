@@ -1,0 +1,449 @@
+diff --git a/media/libaudioprocessing/AudioResampler.cpp b/media/libaudioprocessing/AudioResampler.cpp
+index c761b38c4..ec9759502 100644
+--- a/media/libaudioprocessing/AudioResampler.cpp
++++ b/media/libaudioprocessing/AudioResampler.cpp
+@@ -214,6 +214,17 @@ AudioResampler* AudioResampler::create(audio_format_t format, int inChannelCount
+ 
+     AudioResampler* resampler;
+ 
++    /* pisces: the fixed-quality resamplers below only understand 16-bit input;
++     * a float track mixed at a music rate selects DEFAULT_QUALITY and used to
++     * abort audioserver with
++     *   "Assertion failed: format != AUDIO_FORMAT_PCM_16_BIT".
++     * Fall back to the dynamic resampler, which handles float. */
++    if (format != AUDIO_FORMAT_PCM_16_BIT &&
++            (quality == LOW_QUALITY || quality == MED_QUALITY ||
++             quality == HIGH_QUALITY || quality == VERY_HIGH_QUALITY)) {
++        quality = DYN_LOW_QUALITY;
++    }
++
+     switch (quality) {
+     default:
+     case LOW_QUALITY:
+diff --git a/services/camera/libcameraservice/CameraFlashlight.cpp b/services/camera/libcameraservice/CameraFlashlight.cpp
+index e629cdd79..6dcd47cc1 100644
+--- a/services/camera/libcameraservice/CameraFlashlight.cpp
++++ b/services/camera/libcameraservice/CameraFlashlight.cpp
+@@ -78,6 +78,31 @@ status_t CameraFlashlight::setTorchMode(const String8& cameraId, bool enabled) {
+             cameraId.string(), enabled);
+ 
+     status_t res = OK;
++
++    /*
++     * pisces: drive /sys/class/leds/flashlight directly instead of opening the
++     * camera through the HAL.  Opening the camera just to toggle the torch
++     * leaves the HAL's internal state dirty (the next camera open then fails
++     * with 0xd), and the max77665-flash driver already exposes the LED as a
++     * led-class device, so a plain brightness write is enough.
++     */
++    {
++        const char *kTorchLed = "/sys/class/leds/flashlight/brightness";
++        if (access(kTorchLed, W_OK) == 0) {
++            FILE *led = fopen(kTorchLed, "we");
++            if (led == NULL) {
++                ALOGE("%s: cannot open %s", __FUNCTION__, kTorchLed);
++                return -ENODEV;
++            }
++            int value = enabled ? 255 : 0;
++            int written = fprintf(led, "%d", value);
++            fclose(led);
++            ALOGI("%s: torch %s via %s (%d)", __FUNCTION__,
++                    enabled ? "on" : "off", kTorchLed, written);
++            return written > 0 ? OK : -EIO;
++        }
++    }
++
+     Mutex::Autolock l(mLock);
+ 
+     if (mOpenedCameraIds.indexOf(cameraId) != NAME_NOT_FOUND) {
+@@ -122,7 +147,6 @@ status_t CameraFlashlight::setTorchMode(const String8& cameraId, bool enabled) {
+ 
+ status_t CameraFlashlight::findFlashUnits() {
+     Mutex::Autolock l(mLock);
+-    status_t res;
+ 
+     std::vector<String8> cameraIds;
+     std::vector<std::string> ids = mProviderManager->getCameraDeviceIds();
+@@ -141,26 +165,23 @@ status_t CameraFlashlight::findFlashUnits() {
+             continue;
+         }
+ 
+-        bool hasFlash = false;
+-        res = createFlashlightControl(id);
+-        if (res) {
+-            ALOGE("%s: failed to create flash control for %s", __FUNCTION__,
+-                    id.string());
+-        } else {
+-            res = mFlashControl->hasFlashUnit(id, &hasFlash);
+-            if (res == -EUSERS || res == -EBUSY) {
+-                ALOGE("%s: failed to check if camera %s has a flash unit. Some "
+-                        "camera devices may be opened", __FUNCTION__,
+-                        id.string());
+-                return res;
+-            } else if (res) {
+-                ALOGE("%s: failed to check if camera %s has a flash unit. %s"
+-                        " (%d)", __FUNCTION__, id.string(), strerror(-res),
+-                        res);
+-            }
+-
+-            mFlashControl.clear();
+-        }
++        /*
++         * pisces: do not probe the camera here.  hasFlashUnit() opens the
++         * device through CameraHardwareInterface (and sets a preview window on
++         * it) just to read the flash parameters, then closes it again.  The
++         * 2013 tegra HAL does not release its sensor/imager on close, so that
++         * probe leaves the IMX135 claimed and the real camera open fails:
++         *   IMX135 **** Can not open camera device: Device or resource busy
++         *   setupHalInLock:539 failed to open camera! Error: 0x70001
++         * There is no usable flash on this port yet, so report "no flash" and
++         * never touch the device.
++         */
++        /*
++         * pisces: the rear module has the max77665 flash LED; the front has
++         * none.  Report it without probing the camera - the probe opened the
++         * device and left the 2013 HAL's sensor/focuser/torch state claimed.
++         */
++        bool hasFlash = (id == String8("0"));
+         mHasFlashlightMap.add(id, hasFlash);
+     }
+ 
+diff --git a/services/camera/libcameraservice/CameraService.cpp b/services/camera/libcameraservice/CameraService.cpp
+index 550be4a7d..a0373155d 100644
+--- a/services/camera/libcameraservice/CameraService.cpp
++++ b/services/camera/libcameraservice/CameraService.cpp
+@@ -63,6 +63,8 @@
+ 
+ #include <system/camera.h>
+ 
++#include <utils/CallStack.h>
++
+ #include "CameraService.h"
+ #include "api1/CameraClient.h"
+ #include "api1/Camera2Client.h"
+@@ -550,8 +552,27 @@ int CameraService::getDeviceVersion(const String8& cameraId, int* facing) {
+ 
+     status_t res;
+     hardware::hidl_version maxVersion{0,0};
+-    res = mCameraProviderManager->getHighestSupportedVersion(cameraId.string(),
+-            &maxVersion);
++    /*
++     * pisces: every camera close takes the whole provider process down (the
++     * 2013 vendor HAL crashes in its own teardown) and init respawns it,
++     * which leaves the device missing from any provider for a few hundred
++     * milliseconds.  Wait for it to come back instead of reporting the camera
++     * as unknown: the camera manager of an app calls this (through
++     * supportsCameraApi) on every open, so a switch that lands inside the
++     * restart window would otherwise fail with "Unknown camera ID".
++     */
++    for (int attempt = 0; ; attempt++) {
++        res = mCameraProviderManager->getHighestSupportedVersion(cameraId.string(),
++                &maxVersion);
++        if (res == OK || attempt >= 25) {
++            break;
++        }
++        if (attempt == 0) {
++            ALOGW("%s: camera %s is not in a provider yet, waiting for the restart",
++                    __FUNCTION__, cameraId.string());
++        }
++        usleep(100000);
++    }
+     if (res != OK) return -1;
+     deviceVersion = HARDWARE_DEVICE_API_VERSION(maxVersion.get_major(), maxVersion.get_minor());
+ 
+@@ -749,6 +770,39 @@ Status CameraService::initializeShimMetadata(int cameraId) {
+     }
+     return ret;
+ }
++/*
++ * pisces: cache the legacy ("Camera1 API shim") parameters on disk.
++ *
++ * The shim parameters are fetched by opening the camera with a throw-away
++ * client, and the 2013 tegra HAL does not undo its internal state (focuser
++ * "NvFmInitialize: Failed already initialized", sensor/focuser/torch/VI fds
++ * stay claimed) when that client disconnects.  The very next real open - the
++ * camera app - then fails with 0xd / 0x30012.  The parameter blob is static,
++ * so keep a copy in /data/misc/cameraserver and serve it from there on later
++ * boots, which means the camera is never touched before the app opens it.
++ */
++static const char kShimParamsCache[] =
++        "/data/misc/cameraserver/pisces_shim_params.txt";
++
++static bool readShimParamsCache(String8 *out) {
++    FILE *f = fopen(kShimParamsCache, "re");
++    if (f == NULL) return false;
++    char buf[4096];
++    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
++    fclose(f);
++    if (n == 0) return false;
++    buf[n] = '\0';
++    out->setTo(buf, n);
++    return true;
++}
++
++static void writeShimParamsCache(const String8 &params) {
++    if (params.size() == 0 || params.size() >= 4095) return;
++    FILE *f = fopen(kShimParamsCache, "we");
++    if (f == NULL) return;
++    fwrite(params.string(), 1, params.size(), f);
++    fclose(f);
++}
+ 
+ Status CameraService::getLegacyParametersLazy(int cameraId,
+         /*out*/
+@@ -780,6 +834,18 @@ Status CameraService::getLegacyParametersLazy(int cameraId,
+             *parameters = p;
+             return ret;
+         }
++
++        /* pisces: fall back to the on-disk copy before opening the camera */
++        String8 cached;
++        if (readShimParamsCache(&cached)) {
++            CameraParameters cachedParams(cached);
++            if (!cachedParams.isEmpty()) {
++                ALOGI("%s: serving legacy parameters from cache", __FUNCTION__);
++                cameraState->setShimParams(cachedParams);
++                *parameters = cachedParams;
++                return ret;
++            }
++        }
+     }
+ 
+     int64_t token = IPCThreadState::self()->clearCallingIdentity();
+@@ -803,6 +869,8 @@ Status CameraService::getLegacyParametersLazy(int cameraId,
+         CameraParameters p = cameraState->getShimParams();
+         if (!p.isEmpty()) {
+             *parameters = p;
++            /* pisces: remember them so the next boot never opens the camera */
++            writeShimParamsCache(p.flatten());
+             return ret;
+         }
+     }
+@@ -1300,6 +1368,7 @@ Status CameraService::connectHelper(const sp<CALLBACK>& cameraCb, const String8&
+ 
+     int originalClientPid = 0;
+ 
++    ALOGI("pisces connect backtrace: %s", android::CallStack().toString().c_str());
+     ALOGI("CameraService::connect call (PID %d \"%s\", camera ID %s) for HAL version %s and "
+             "Camera API version %d", clientPid, clientName8.string(), cameraId.string(),
+             (halVersion == -1) ? "default" : std::to_string(halVersion).c_str(),
+@@ -1325,6 +1394,27 @@ Status CameraService::connectHelper(const sp<CALLBACK>& cameraCb, const String8&
+             return ret;
+         }
+ 
++        /*
++         * pisces: the 2013 Tegra camera HAL crashes in its own teardown, so
++         * every camera close takes the whole provider process down and init
++         * respawns it.  While it comes back the camera is not in any provider
++         * yet; wait for it instead of failing the app's open with "camera
++         * unavailable".  The restart takes ~100-400 ms in practice.
++         */
++        for (int attempt = 0; attempt < 30; attempt++) {
++            int probeFacing = -1;
++            if (getDeviceVersion(cameraId, &probeFacing) >= 0) {
++                break;
++            }
++            if (attempt == 0) {
++                ALOGW("%s: camera %s is not in a provider yet, waiting for it to come back",
++                        __FUNCTION__, cameraId.string());
++            }
++            mServiceLock.unlock();
++            usleep(100000);
++            mServiceLock.lock();
++        }
++
+         // Check the shim parameters after acquiring lock, if they have already been updated and
+         // we were doing a shim update, return immediately
+         if (shimUpdateOnly) {
+diff --git a/services/camera/libcameraservice/api1/CameraClient.cpp b/services/camera/libcameraservice/api1/CameraClient.cpp
+index a5aa4742a..a1f609aac 100644
+--- a/services/camera/libcameraservice/api1/CameraClient.cpp
++++ b/services/camera/libcameraservice/api1/CameraClient.cpp
+@@ -704,7 +704,33 @@ status_t CameraClient::setParameters(const String8& params) {
+ String8 CameraClient::getParameters() const {
+     Mutex::Autolock lock(mLock);
+     // The camera service can unconditionally get the parameters at all times
+-    if (getCallingPid() != mServicePid && checkPidAndHardware() != NO_ERROR) return String8();
++    if (getCallingPid() != mServicePid && checkPidAndHardware() != NO_ERROR) {
++        /*
++         * pisces: the camera provider is restarted after every camera close
++         * (the 2013 HAL cannot reset its module state), so a client that was
++         * connected just before that restart can momentarily have no hardware.
++         * Returning an empty string made Snap crash with
++         * "getParameters failed (empty parameters)" right after a rear<->front
++         * switch; hand back the cached parameter blob instead.
++         */
++        char shimPath[128];
++        snprintf(shimPath, sizeof(shimPath), "/data/misc/pisces_camera/params_%d.txt", mCameraId);
++        FILE *f = fopen(shimPath, "re");
++        if (f == NULL) {
++            f = fopen("/data/misc/pisces_camera/params_0.txt", "re");
++        }
++        if (f != NULL) {
++            char buf[4096];
++            size_t n = fread(buf, 1, sizeof(buf) - 1, f);
++            fclose(f);
++            if (n > 0) {
++                buf[n] = '\0';
++                ALOGE("%s: no hardware, serving cached parameters", __FUNCTION__);
++                return String8(buf);
++            }
++        }
++        return String8();
++    }
+ 
+     String8 params(mHardware->getParameters().flatten());
+     LOG1("getParameters (pid %d) (%s)", getCallingPid(), params.string());
+diff --git a/services/camera/libcameraservice/common/CameraProviderManager.cpp b/services/camera/libcameraservice/common/CameraProviderManager.cpp
+index 0ce4318e7..32e642946 100644
+--- a/services/camera/libcameraservice/common/CameraProviderManager.cpp
++++ b/services/camera/libcameraservice/common/CameraProviderManager.cpp
+@@ -311,24 +311,43 @@ status_t CameraProviderManager::openSession(const std::string &id,
+         /*out*/
+         sp<hardware::camera::device::V1_0::ICameraDevice> *session) {
+ 
+-    std::lock_guard<std::mutex> lock(mInterfaceMutex);
+-
+-    auto deviceInfo = findDeviceInfoLocked(id,
+-            /*minVersion*/ {1,0}, /*maxVersion*/ {2,0});
+-    if (deviceInfo == nullptr) return NAME_NOT_FOUND;
+-
+-    auto *deviceInfo1 = static_cast<ProviderInfo::DeviceInfo1*>(deviceInfo);
++    /*
++     * pisces: the camera provider is restarted after every camera close (the
++     * 2013 HAL cannot reset its module state, and a rear->front switch left
++     * the front sensor streaming into a dead CSI).  Retry the open for ~4 s,
++     * dropping mInterfaceMutex while sleeping so the new provider can
++     * register, instead of failing the client's open.
++     */
++    const int kAttempts = 14;
++    for (int attempt = 0; attempt < kAttempts; attempt++) {
++        ProviderInfo::DeviceInfo1 *deviceInfo1 = nullptr;
++        {
++            std::lock_guard<std::mutex> lock(mInterfaceMutex);
++            auto deviceInfo = findDeviceInfoLocked(id,
++                    /*minVersion*/ {1,0}, /*maxVersion*/ {2,0});
++            if (deviceInfo != nullptr) {
++                deviceInfo1 = static_cast<ProviderInfo::DeviceInfo1*>(deviceInfo);
++            }
++        }
+ 
+-    hardware::Return<Status> status = deviceInfo1->mInterface->open(callback);
+-    if (!status.isOk()) {
+-        ALOGE("%s: Transaction error opening a session for camera device %s: %s",
+-                __FUNCTION__, id.c_str(), status.description().c_str());
+-        return DEAD_OBJECT;
+-    }
+-    if (status == Status::OK) {
+-        *session = deviceInfo1->mInterface;
++        if (deviceInfo1 != nullptr) {
++            hardware::Return<Status> status = deviceInfo1->mInterface->open(callback);
++            if (status.isOk() && status == Status::OK) {
++                *session = deviceInfo1->mInterface;
++                return OK;
++            }
++            ALOGW("%s: open of camera %s failed on attempt %d, retrying",
++                    __FUNCTION__, id.c_str(), attempt);
++        } else if (attempt == 0) {
++            ALOGW("%s: camera %s not present yet, waiting for the provider",
++                    __FUNCTION__, id.c_str());
++        }
++        usleep(300000);
+     }
+-    return mapToStatusT(status);
++
++    ALOGE("%s: giving up on camera %s after %d attempts", __FUNCTION__,
++            id.c_str(), kAttempts);
++    return DEAD_OBJECT;
+ }
+ 
+ 
+@@ -476,15 +495,26 @@ status_t CameraProviderManager::removeProvider(const std::string& provider) {
+         ALOGW("%s: Camera provider HAL with name '%s' is not registered", __FUNCTION__,
+                 provider.c_str());
+     } else {
+-        // Inform camera service of loss of presence for all the devices from this provider,
+-        // without lock held for reentrancy
+-        sp<StatusListener> listener = getStatusListener();
+-        if (listener != nullptr) {
+-            lock.unlock();
+-            for (auto& id : removedDeviceIds) {
+-                listener->onDeviceStatusChanged(id, CameraDeviceStatus::NOT_PRESENT);
+-            }
+-        }
++        /*
++         * pisces: do NOT report the devices of a dead provider as NOT_PRESENT.
++         *
++         * The 2013 Tegra camera HAL cannot tear a session down: its worker
++         * thread dereferences freed state and the provider process segfaults
++         * a moment after every camera close.  init restarts the provider
++         * immediately, but while that happens the devices would disappear
++         * from the framework.  Every status change here is forwarded to the
++         * apps through ICameraServiceListener, so the camera app's camera id
++         * list keeps shrinking and growing and a switch that lands inside the
++         * restart window fails with "Unknown camera ID" / "cannot connect to
++         * camera".
++         *
++         * The device ids are stable on this platform (two built-in cameras,
++         * no hotplug), so keep them present and let the restarted provider
++         * re-announce them.  CameraService::connectHelper waits for a
++         * restarting provider before it gives up.
++         */
++        ALOGI("%s: provider '%s' went away, keeping %zu device(s) present",
++                __FUNCTION__, provider.c_str(), removedDeviceIds.size());
+     }
+     return res;
+ }
+@@ -914,39 +944,19 @@ CameraProviderManager::ProviderInfo::DeviceInfo1::DeviceInfo1(const std::string&
+         DeviceInfo(name, tagId, id, hardware::hidl_version{1, minorVersion},
+                    resourceCost),
+         mInterface(interface) {
+-    // Get default parameters and initialize flash unit availability
+-    // Requires powering on the camera device
+-    hardware::Return<Status> status = mInterface->open(nullptr);
+-    if (!status.isOk()) {
+-        ALOGE("%s: Transaction error opening camera device %s to check for a flash unit: %s",
+-                __FUNCTION__, mId.c_str(), status.description().c_str());
+-        return;
+-    }
+-    if (status != Status::OK) {
+-        ALOGE("%s: Unable to open camera device %s to check for a flash unit: %s", __FUNCTION__,
+-                mId.c_str(), CameraProviderManager::statusToString(status));
+-        return;
+-    }
+-    hardware::Return<void> ret;
+-    ret = mInterface->getParameters([this](const hardware::hidl_string& parms) {
+-                mDefaultParameters.unflatten(String8(parms.c_str()));
+-            });
+-    if (!ret.isOk()) {
+-        ALOGE("%s: Transaction error reading camera device %s params to check for a flash unit: %s",
+-                __FUNCTION__, mId.c_str(), status.description().c_str());
+-        return;
+-    }
+-    const char *flashMode =
+-            mDefaultParameters.get(CameraParameters::KEY_SUPPORTED_FLASH_MODES);
+-    if (flashMode && strstr(flashMode, CameraParameters::FLASH_MODE_TORCH)) {
+-        mHasFlashUnit = true;
+-    }
+-
+-    ret = mInterface->close();
+-    if (!ret.isOk()) {
+-        ALOGE("%s: Transaction error closing camera device %s after check for a flash unit: %s",
+-                __FUNCTION__, mId.c_str(), status.description().c_str());
+-    }
++    // pisces: do NOT probe the camera by opening it here.
++    //
++    // Stock Android opens each device once at enumeration time "to check for a
++    // flash unit", reads the default parameters and closes it again.  The 2013
++    // tegra HAL powers the sensor (and opens /dev/imx135, /dev/nvhost-vi and
++    // /dev/tegra_camera) during that open, but its getParameters() is not
++    // implemented, so this code returned early without ever calling close().
++    // The sensor stayed claimed and every later open - the real one from the
++    // camera app - failed with
++    //   IMX135: Can not open camera device: Device or resource busy
++    //   setupHalInLock:539 failed to open camera! Error: 0x70001
++    // Skipping the probe leaves mHasFlashUnit false (no flash UI) but lets the
++    // first open be the application's own, which is the one that works.
+ }
+ 
+ CameraProviderManager::ProviderInfo::DeviceInfo1::~DeviceInfo1() {}
