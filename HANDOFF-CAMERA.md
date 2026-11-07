@@ -574,3 +574,12 @@ E wificond: Failed to get NL80211_RATE_INFO_BITRATE32
   `FLASH_PIN_STATE`（唯一会拉 strobe PBB4 的命令）；驱动侧补脉冲、
   `imx135_pdata` 的 `flash_cap` 都试过，照片依旧全黑，需要进一步反汇编 HAL 的闪光路径。
   目前设备 overlay 默认闪光灯 = off，避免拍出全黑照片。
+
+### 16.1 凌晨交付状态（2026-11-08 00:40）
+
+- 最终镜像：`/data/lineage-16.0/out/target/product/pisces/lineage-16.0-20261107-UNOFFICIAL-pisces.zip`
+  （`BUILD_RC=0`，kernel `#228`，已刷入设备）
+- 已验证：照片 1.59 MB / 平均亮度 84.9（正常）；WiFi `RSSI -33 dBm, 65Mbps, score 60`；
+  开机后 `Fatal signal` 计数 0。
+- 未解决：闪光灯（HAL 不触发 strobe）、录像（vendor OMX 未生效，见第 16 节）。
+- 测试工具：`PiscesCamTest`（`--es mode photo --ez snap true --es idx <n>` 可复现参数组合）。
