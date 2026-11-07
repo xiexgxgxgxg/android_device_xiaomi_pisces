@@ -432,3 +432,24 @@ NvOsDbg : size of buffer 211851 0 205731 3171 0
 2. 若与内核无关，就在 HAL 的 still 路径加日志，确认是 sensor 没切到 still 模式还是
    post-process 没填 buffer；
 3. 也可以先用小尺寸（如 2MP）拍照对比，判断是不是 12MP 大 buffer 的分配/IOMMU 问题。
+
+### 15.1 进展：HAL 本身没问题，是 Snap 这条路径
+
+用我们自己的 `PiscesCamTest`（camera1 API，SurfaceTexture 做预览）直接拍 4208x3120：
+
+```
+PHOTO start id=0 size=4208x3120 preview=960x720
+PHOTO 4208x3120 bytes=3101362 avg=93      ← 3.1MB、平均亮度 93，是正常照片
+```
+
+也就是说 **HAL 的 still capture 是好的**，同一台机器、同一个 provider、同一时刻，
+Snap 拍出来是全黑（211851 字节、avg=1），测试 App 拍出来是正常图像。
+
+差异只在 Snap 的调用方式上，接下来按这个顺序二分：
+1. 预览尺寸：Snap 用 1024x768，测试 App 默认 960x720（`--ei vw 1024 --ei vh 768` 可指定）；
+2. Snap 会设置一整套参数（jpeg-quality=85、jpeg-thumbnail-size=0x0、picture-format、
+   zsl、xiaomi-still-beautify、tsmakeup、bokeh…），逐项加进测试 App 对比；
+3. Snap 的预览 surface 是 SurfaceView/GL，测试 App 是哑 SurfaceTexture。
+
+顺带：`libcameraservice` 里所有 HIDL 调用已加 `isOk()` 检查（patch 0046），
+拍照不再把 cameraserver 打死（实测 0 次 Fatal signal）。
