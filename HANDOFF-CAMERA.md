@@ -399,3 +399,36 @@ soundtrigger/SoundTrigger.cpp
 
 `patches/0028` 与 fork（`android_frameworks_av` 分支 `lineage-16.0-pisces`）保留作等价备份；
 `apply-pisces-patches.sh` 遇到已应用的 0028 会自动跳过。
+
+## 十五、遗留：拍照得到全黑 JPEG（2026-11-07 夜）
+
+现象：预览正常，按下快门后
+- 生成的文件是**合法 JPEG**（3120x4208，Exif 正常，0644、媒体库已收录），
+  但解码后**所有像素都是 1**（mean=1.0, min=1, max=1）→ 全黑；
+- 相册里显示为灰色占位；
+- 拍完之后取景框变黑，之后再按快门不再出片（相机会话已死）。
+
+HAL 日志（`NvCameraHal*`）里能看到：
+
+```
+StartStillCapture, Request.Resolution.width 4208, Request.Resolution.height 3120
+NvOsDbg : Set resolution to 4208x3120
+NvMMEventHandler: got StillCaptureProcessing / StillCaptureReady      (~335ms 后，偏快)
+NvCameraHalCore: StartPreviewInternal++
+NvOsDbg : Set resolution to 2104x1560
+NvCameraHalEventHelpers: EmptyStillBuffer, ... BufferMetaDataType == NvMMBufferMetadataType_DigitalZoom 0
+NvCameraSettings: GetIsoSensitivity, iso value :0
+NvOsDbg : [Image-Enc] Client requested Primary Only. Primary done
+NvOsDbg : size of buffer 211851 0 205731 3171 0
+```
+
+即：**still capture 拿到的是空帧**（buffer 元数据为空、ISO=0），编码器把空 buffer 编成了合法但全黑的 JPEG。
+问题不在存储（写文件、权限、媒体库都正常），也不在预览（预览有画面）。
+
+时间线：19:14 那张照片是**有内容**的（mean=105.6），当时的组合是 kernel #216 + 19:04 的 ROM；
+20:16 的 ROM（kernel #219）之后拍的每一张都是全黑。优先验证方向：
+1. 用干净内核源码（`/data/twrp/kernel/src`，注意构建树 defconfig 比仓库多一行
+   `CONFIG_VIDEO_TEGRA=y`，那是相机 V4L2 host，必须保留）重编 boot.img 做 A/B；
+2. 若与内核无关，就在 HAL 的 still 路径加日志，确认是 sensor 没切到 still 模式还是
+   post-process 没填 buffer；
+3. 也可以先用小尺寸（如 2MP）拍照对比，判断是不是 12MP 大 buffer 的分配/IOMMU 问题。
