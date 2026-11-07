@@ -506,3 +506,35 @@ Snap 拍出来是全黑（211851 字节、avg=1），测试 App 拍出来是正�
    到底走哪条路径。
 
 临时规避：设备 overlay 已把 Snap 默认闪光灯设为 off。
+
+### 15.4 闪光灯：HAL 只设电流，从不“触发”
+
+给 `max77665-flash.c` 的 ioctl/`set_param` 加了打印（kernel #222），拍照时的调用序列是：
+
+```
+pisces: ioctl cmd=40106f68 arg=...   (NVC_IOCTL_PARAM_WR)
+pisces: set_param id=7               (NVC_PARAM_FLASH_LEVEL)
+pisces: ioctl cmd=c0106f69 arg=...   (NVC_IOCTL_PARAM_RD)
+pisces: set_param id=10              (NVC_PARAM_TORCH_LEVEL)
+...
+pisces: set_param id=7               (FLASH_LEVEL 再设一次)
+```
+
+即 HAL **确实在操作 /dev/torch**，但**从来没有发 `NVC_PARAM_FLASH_PIN_STATE`（id=8）**
+——那才是真正拉 strobe、点亮闪光灯的命令。参数枚举见 `include/media/nvc.h`：
+`NVC_PARAM_FLASH_CAPS=6, FLASH_LEVEL=7, FLASH_PIN_STATE=8, TORCH_CAPS=9, TORCH_LEVEL=10`。
+
+另外 `board-pisces-sensors.c` 里的 `imx135_pdata` **没有配置 `flash_cap`**
+（`.flash_cap.enable` 为 0，`imx135_get_flash_cap()` 直接返回 -ENODEV），
+所以 sensor 也不会进入 flash/strobe 模式去驱动 PBB4。板级文件与小米原厂
+`/data/twrp/kernel/stock-src` 逐字节一致，说明原厂也是这个配置——原厂能亮灯，
+大概率是靠 HAL 显式发 FLASH_PIN_STATE，而我们这版 HAL 的闪光路径没走到那里。
+
+两个可能的修法（下一步验证）：
+1. 在 `imx135_pdata` 里打开 `flash_cap`（`enable/edge_trig_en/start_edge/repeat/delay_frm`），
+   让 sensor 在拍照时自己拉 strobe；
+2. 在驱动里把 “TORCH_LEVEL(10) 带 flash 语义” 当作触发（相当于替 HAL 补一次
+   `max77665_f_strobe()`），这是 hack，但能立刻验证“只要灯亮，照片就正常”。
+
+注意：kernel #222 目前带着上面这些调试打印（`pisces: ioctl` / `pisces: set_param`），
+验证完要清掉。
