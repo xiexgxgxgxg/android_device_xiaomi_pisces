@@ -1,0 +1,85 @@
+diff --git a/services/core/java/com/android/server/connectivity/Tethering.java b/services/core/java/com/android/server/connectivity/Tethering.java
+index 5ffa4457d98..34818da2f6a 100644
+--- a/services/core/java/com/android/server/connectivity/Tethering.java
++++ b/services/core/java/com/android/server/connectivity/Tethering.java
+@@ -907,12 +907,16 @@ public class Tethering extends BaseNetworkObserver {
+             //
+             // For more explanation, see b/62552150 .
+             synchronized (Tethering.this.mPublicSync) {
+-                if (!usbConnected && mRndisEnabled) {
+-                    // Turn off tethering if it was enabled and there is a disconnect.
+-                    tetherMatchingInterfaces(IControlsTethering.STATE_AVAILABLE, TETHERING_USB);
+-                } else if (usbConfigured && rndisEnabled) {
+-                    // Tether if rndis is enabled and usb is configured.
++                /* pisces: this board uses the legacy android_usb gadget, whose
++                 * USB_CONNECTED/USB_CONFIGURED flags do not settle in the order
++                 * this code expects - Tethering kept taking the "disconnected"
++                 * branch and actively UNtethered the interface it had just been
++                 * asked to tether.  Drive the state from the rndis function
++                 * instead: rndis on -> tether, rndis off -> untether. */
++                if (rndisEnabled) {
+                     tetherMatchingInterfaces(IControlsTethering.STATE_TETHERED, TETHERING_USB);
++                } else if (mRndisEnabled) {
++                    tetherMatchingInterfaces(IControlsTethering.STATE_AVAILABLE, TETHERING_USB);
+                 }
+                 mRndisEnabled = usbConfigured && rndisEnabled;
+             }
+diff --git a/services/core/jni/com_android_server_UsbDeviceManager.cpp b/services/core/jni/com_android_server_UsbDeviceManager.cpp
+index ff1ec04cb23..84e5eb121b7 100644
+--- a/services/core/jni/com_android_server_UsbDeviceManager.cpp
++++ b/services/core/jni/com_android_server_UsbDeviceManager.cpp
+@@ -129,10 +129,18 @@ static jobject android_server_UsbDeviceManager_openControl(JNIEnv *env, jobject
+     if (!strcmp(function, "mtp") || ptp) {
+         fd = TEMP_FAILURE_RETRY(open(ptp ? FFS_PTP_EP0 : FFS_MTP_EP0, O_RDWR));
+         if (fd < 0) {
+-            ALOGE("could not open control for %s %s", function, strerror(errno));
+-            goto error;
+-        }
+-        if (!writeDescriptors(fd, ptp)) {
++            /* pisces: the legacy android_usb gadget has no per-function
++             * FunctionFS control node, which made UsbDeviceManager mark MTP/PTP
++             * as unavailable ("Failed to open control for mtp") and grey out
++             * every entry of the USB preferences.  The actual switching goes
++             * through the IUsbGadget HAL, so hand back a sink instead. */
++            ALOGW("no ffs control for %s (%s), using the gadget HAL only",
++                  function, strerror(errno));
++            fd = open("/dev/null", O_RDWR);
++            if (fd < 0) {
++                goto error;
++            }
++        } else if (!writeDescriptors(fd, ptp)) {
+             goto error;
+         }
+     }
+diff --git a/services/usb/java/com/android/server/usb/UsbDeviceManager.java b/services/usb/java/com/android/server/usb/UsbDeviceManager.java
+index b67c87e6c41..ad2712d69b7 100644
+--- a/services/usb/java/com/android/server/usb/UsbDeviceManager.java
++++ b/services/usb/java/com/android/server/usb/UsbDeviceManager.java
+@@ -1711,6 +1711,8 @@ public class UsbDeviceManager implements ActivityManagerInternal.ScreenObserver
+     }
+ 
+     private static final class UsbHandlerHal extends UsbHandler {
++        private static final String STATE_PATH = "/sys/class/android_usb/android0/state";
++
+ 
+         /**
+          * Proxy object for the usb gadget hal daemon.
+@@ -1918,6 +1920,18 @@ public class UsbDeviceManager implements ActivityManagerInternal.ScreenObserver
+ 
+                 removeMessages(MSG_SET_FUNCTIONS_TIMEOUT);
+                 Slog.e(TAG, "notifyCurrentFunction request:" + mRequest + " status:" + status);
++                /* pisces: the HAL only read /sys/class/android_usb/android0/state
++                 * once in its constructor, so mConnected stayed at whatever the
++                 * kernel reported while the gadget was still coming up.  Every
++                 * USB_STATE broadcast then said "not connected", which greyed out
++                 * the USB preferences and made Tethering untether the rndis
++                 * interface right away.  Refresh the state after each switch. */
++                try {
++                    String state = FileUtils.readTextFile(new File(STATE_PATH), 0, null).trim();
++                    updateState(state);
++                } catch (Exception e) {
++                    Slog.w(TAG, "cannot refresh the USB state: " + e);
++                }
+                 if (status == Status.SUCCESS) {
+                     mCurrentFunctionsApplied = true;
+                 } else if (!mChargingFunctions) {

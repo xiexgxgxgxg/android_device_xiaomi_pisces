@@ -1,0 +1,159 @@
+diff --git a/camera/device/1.0/default/CameraDevice.cpp b/camera/device/1.0/default/CameraDevice.cpp
+index a1f1830f..54c0f7be 100644
+--- a/camera/device/1.0/default/CameraDevice.cpp
++++ b/camera/device/1.0/default/CameraDevice.cpp
+@@ -92,6 +92,15 @@ CameraDevice::CameraDevice(
+         mDisconnected(false),
+         mCameraDeviceNames(cameraDeviceNames) {
+     mCameraIdInt = atoi(mCameraId.c_str());
++    // pisces: the camera id base of the provider instance this device belongs
++    // to (0 for the rear provider, 1 for the front one); the HAL module always
++    // numbers its cameras from zero.
++    {
++        const char *base = getenv("PISCES_CAM_ID_BASE");
++        if (base != NULL) {
++            mCameraIdInt -= atoi(base);
++        }
++    }
+     // Should not reach here as provider also validate ID
+     if (mCameraIdInt < 0 || mCameraIdInt >= module->getNumberOfCameras()) {
+         ALOGE("%s: Invalid camera id: %s", __FUNCTION__, mCameraId.c_str());
+@@ -695,11 +704,15 @@ Return<Status> CameraDevice::open(const sp<ICameraDeviceCallback>& callback) {
+     if (mModule->getModuleApiVersion() >= CAMERA_MODULE_API_VERSION_2_3 &&
+         info.device_version > CAMERA_DEVICE_API_VERSION_1_0) {
+         // Open higher version camera device as HAL1.0 device.
+-        rc = mModule->openLegacy(mCameraId.c_str(),
++        char moduleId[8];
++        snprintf(moduleId, sizeof(moduleId), "%d", mCameraIdInt);
++        rc = mModule->openLegacy(moduleId,
+                                  CAMERA_DEVICE_API_VERSION_1_0,
+                                  (hw_device_t **)&mDevice);
+     } else {
+-        rc = mModule->open(mCameraId.c_str(), (hw_device_t **)&mDevice);
++        char moduleId[8];
++        snprintf(moduleId, sizeof(moduleId), "%d", mCameraIdInt);
++        rc = mModule->open(moduleId, (hw_device_t **)&mDevice);
+     }
+     if (rc != OK) {
+         mDevice = nullptr;
+diff --git a/camera/provider/2.4/default/CameraProvider.cpp b/camera/provider/2.4/default/CameraProvider.cpp
+index 63139390..7bc06942 100644
+--- a/camera/provider/2.4/default/CameraProvider.cpp
++++ b/camera/provider/2.4/default/CameraProvider.cpp
+@@ -37,6 +37,23 @@ namespace implementation {
+ 
+ namespace {
+ const char *kLegacyProviderName = "legacy/0";
++
++// pisces: the HIDL instance name of this provider process (legacy/0 for the
++// rear sensor, legacy/1 for the front one); HIDL_FETCH_ICameraProvider is
++// called with the same name the service registered.
++static const char *legacyProviderName()
++{
++    const char *instance = getenv("PISCES_PROVIDER_INSTANCE");
++    return (instance != NULL) ? instance : kLegacyProviderName;
++}
++
++// pisces: the camera id base of this provider instance (0 for the rear
++// provider, 1 for the front one), so the two providers expose unique ids.
++static int cameraIdBase()
++{
++    const char *base = getenv("PISCES_CAM_ID_BASE");
++    return (base != NULL) ? atoi(base) : 0;
++}
+ const char *kExternalProviderName = "external/0";
+ // "device@<version>/legacy/<id>"
+ const std::regex kDeviceNameRE("device@([0-9]+\\.[0-9]+)/legacy/(.+)");
+@@ -71,7 +88,7 @@ using ::android::hardware::camera::common::V1_0::Status;
+ void CameraProvider::addDeviceNames(int camera_id, CameraDeviceStatus status, bool cam_new)
+ {
+     char cameraId[kMaxCameraIdLen];
+-    snprintf(cameraId, sizeof(cameraId), "%d", camera_id);
++    snprintf(cameraId, sizeof(cameraId), "%d", camera_id + cameraIdBase());
+     std::string cameraIdStr(cameraId);
+ 
+     mCameraIds.add(cameraIdStr);
+@@ -330,7 +347,9 @@ bool CameraProvider::initialize() {
+         }
+ 
+         char cameraId[kMaxCameraIdLen];
+-        snprintf(cameraId, sizeof(cameraId), "%d", i);
++        // pisces: key the status map by the same (base-shifted) id that
++        // addDeviceNames() uses, otherwise getCameraIdList() skips the device.
++        snprintf(cameraId, sizeof(cameraId), "%d", i + cameraIdBase());
+         std::string cameraIdStr(cameraId);
+         mCameraStatusMap[cameraIdStr] = CAMERA_DEVICE_STATUS_PRESENT;
+ 
+@@ -607,7 +626,7 @@ Return<void> CameraProvider::getCameraDeviceInterface_V3_x(
+ }
+ 
+ ICameraProvider* HIDL_FETCH_ICameraProvider(const char* name) {
+-    if (strcmp(name, kLegacyProviderName) == 0) {
++    if (strcmp(name, legacyProviderName()) == 0) {
+         CameraProvider* provider = new CameraProvider();
+         if (provider == nullptr) {
+             ALOGE("%s: cannot allocate camera provider!", __FUNCTION__);
+diff --git a/camera/provider/2.4/default/service.cpp b/camera/provider/2.4/default/service.cpp
+index 7eeb6379..bee02310 100644
+--- a/camera/provider/2.4/default/service.cpp
++++ b/camera/provider/2.4/default/service.cpp
+@@ -20,6 +20,7 @@
+ #include <hidl/LegacySupport.h>
+ 
+ #include <binder/ProcessState.h>
++#include <stdlib.h>
+ 
+ using android::hardware::camera::provider::V2_4::ICameraProvider;
+ using android::hardware::defaultPassthroughServiceImplementation;
+@@ -30,5 +31,17 @@ int main()
+     // The camera HAL may communicate to other vendor components via
+     // /dev/vndbinder
+     android::ProcessState::initWithDriver("/dev/vndbinder");
+-    return defaultPassthroughServiceImplementation<ICameraProvider>("legacy/0", /*maxThreads*/ 6);
++
++    // pisces: the 2013 Tegra camera HAL can only serve one sensor per process,
++    // so the provider is started twice - once per sensor - and the camera
++    // service switches between the two providers instead of switching sensors
++    // inside one HAL.  The instance name (and the camera id base that keeps the
++    // ids unique across the two providers) comes from the environment, set by
++    // the init service definition.
++    const char *instance = getenv("PISCES_PROVIDER_INSTANCE");
++    if (instance == NULL) {
++        instance = "legacy/0";
++    }
++    ALOGI("Camera provider instance: %s", instance);
++    return defaultPassthroughServiceImplementation<ICameraProvider>(instance, /*maxThreads*/ 6);
+ }
+diff --git a/usb/1.0/default/Usb.cpp b/usb/1.0/default/Usb.cpp
+index 6eb88428..310e1119 100644
+--- a/usb/1.0/default/Usb.cpp
++++ b/usb/1.0/default/Usb.cpp
+@@ -241,7 +241,27 @@ Status getPortStatusHelper (hidl_vec<PortStatus>& currentPortStatus) {
+     std::vector<std::string> names;
+     Status result = getTypeCPortNamesHelper(names);
+ 
+-    if (result == Status::SUCCESS) {
++    if (result == Status::ERROR || names.empty()) {
++        {
++            /* pisces: the helper returns ERROR when /sys/class/dual_role_usb
++             * does not exist at all (this board has neither dual_role_usb nor
++             * typec). */
++            /* pisces: this board has neither /sys/class/dual_role_usb nor
++             * typec, so the HAL reported no ports at all.  UsbPortManager then
++             * cannot tell that the data role is DEVICE and
++             * UsbDetailsFunctionsController disables the whole USB preferences
++             * page.  Report the one physical port as a device/sink port. */
++            ALOGI("no dual_role_usb ports, reporting the fixed device port");
++            currentPortStatus.resize(1);
++            currentPortStatus[0].portName = "port0";
++            currentPortStatus[0].currentDataRole = PortDataRole::DEVICE;
++            currentPortStatus[0].currentPowerRole = PortPowerRole::SINK;
++            currentPortStatus[0].currentMode = PortMode::UFP;
++            currentPortStatus[0].canChangeMode = false;
++            currentPortStatus[0].canChangeDataRole = false;
++            currentPortStatus[0].canChangePowerRole = false;
++            return Status::SUCCESS;
++        }
+         currentPortStatus.resize(names.size());
+         for(std::vector<std::string>::size_type i = 0; i < names.size(); i++) {
+             ALOGI("%s", names[i].c_str());

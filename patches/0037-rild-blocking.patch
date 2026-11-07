@@ -1,0 +1,24 @@
+diff --git a/rild/rild.c b/rild/rild.c
+index c554a9f..6e668cf 100644
+--- a/rild/rild.c
++++ b/rild/rild.c
+@@ -203,9 +203,16 @@ int main(int argc, char **argv) {
+         argc = make_argv(args, rilArgv);
+     }
+ 
+-    rilArgv[argc++] = "-c";
+-    rilArgv[argc++] = (char*)clientId;
+-    RLOGD("RIL_Init argc = %d clientId = %s", argc, rilArgv[argc-1]);
++    // pisces: the 2012 Spreadtrum RIL parses its arguments with getopt() and
++    // aborts ("invalid option -- c", then "xiaomi-ril requires: -p ... or -d
++    // ...") when it sees the "-c <clientId>" that A9's rild appends.  That
++    // argument only selects the HIDL service name and this is a single-SIM
++    // device, so only pass it when a non-default slot was requested.
++    if (clientId != NULL && strcmp(clientId, "0") != 0) {
++        rilArgv[argc++] = "-c";
++        rilArgv[argc++] = (char*)clientId;
++    }
++    RLOGD("RIL_Init argc = %d clientId = %s", argc, clientId);
+ 
+     // Make sure there's a reasonable argv[0]
+     rilArgv[0] = argv[0];

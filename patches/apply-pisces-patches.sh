@@ -37,4 +37,17 @@ apply 0026-gralloc-free-local-alloc.patch           frameworks/native
 patch -p1 -d "$ROOT" -i "$P/0027-camera-wrapper-a9-headers.patch"
 apply 0028-frameworks-av-camera-provider-restart.patch frameworks/av
 apply 0029-system-core-init-charger-mode.patch     system/core
+# 0028-0039 record the work that had been left uncommitted in the tree
+# (camera provider restart, charger mode, dual-provider camera HIDL, and the
+# MTP/hotspot/vibration/USB fixes of the earlier sessions).
+apply 0030-wpa-supplicant-nl80211-mac.patch         external/wpa_supplicant_8
+apply 0031-bt-vendor-libbt.patch                    hardware/broadcom/libbt
+apply 0032-bcmdhd-wifi-hal.patch                    hardware/broadcom/wlan
+apply 0033-camera-dual-provider-providers.patch     hardware/interfaces
+apply 0034-settings-tethering-usb.patch             packages/apps/Settings
+apply 0035-libchrome-include-generator.patch        external/libchrome
+apply 0036-frameworks-base-tethering-usb.patch      frameworks/base
+apply 0037-rild-blocking.patch                      hardware/ril
+apply 0038-usbd-fixes.patch                         system/core
+apply 0039-vold-volume-manager.patch               system/vold
 echo "all patches applied"

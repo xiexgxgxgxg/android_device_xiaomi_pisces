@@ -1,0 +1,47 @@
+diff --git a/include/vnd_pisces.txt b/include/vnd_pisces.txt
+new file mode 100644
+index 0000000..0c8c606
+--- /dev/null
++++ b/include/vnd_pisces.txt
+@@ -0,0 +1,13 @@
++BLUETOOTH_UART_DEVICE_PORT = "/dev/ttyHS2"
++FW_PATCHFILE_LOCATION = "/system/etc/firmware/"
++# The BCM43341 on this board keeps running at the firmware-download baud rate:
++# after "Firmware configured" it still answers HCI Reset at 115200 but not at
++# 3 Mbit, so switching the host to 3 Mbit breaks every later command
++# ("command_timed_out ... opcode 0xc03").
++UART_TARGET_BAUD_RATE = 115200
++LPM_IDLE_TIMEOUT_MULTIPLE = 5
++SCO_USE_I2S_INTERFACE = FALSE
++BTVND_DBG = FALSE
++BTHW_DBG = TRUE
++VNDUSERIAL_DBG = FALSE
++UPIO_DBG = FALSE
+diff --git a/src/hardware.c b/src/hardware.c
+index 2a2ac66..0d56483 100644
+--- a/src/hardware.c
++++ b/src/hardware.c
+@@ -981,6 +981,23 @@ void hw_config_cback(void *p_mem)
+                 break;
+ 
+             case HW_CFG_START:
++            {
++                /* pisces: the vendor HCD download leaves the BCM43341 hung -
++                 * it stops answering HCI at any baud until BT_REG_ON is
++                 * power cycled, and the stack then times out on HCI Reset.
++                 * The chip's ROM firmware speaks HCI fine, so allow the
++                 * download to be skipped for testing:
++                 *   setprop persist.pisces.bt.skip_fw 1
++                 */
++                char skip[PROPERTY_VALUE_MAX];
++                property_get("persist.pisces.bt.skip_fw", skip, "0");
++                if (skip[0] == '1') {
++                    ALOGI("pisces: skipping the HCD download");
++                    hw_cfg_cb.state = 0;
++                    bt_vendor_cbacks->fwcfg_cb(BT_VND_OP_RESULT_SUCCESS);
++                    break;
++                }
++            }
+                 if (UART_TARGET_BAUD_RATE > 3000000)
+                 {
+                     /* set UART clock to 48MHz */

@@ -1,0 +1,29 @@
+diff --git a/bcmdhd/wifi_hal/wifi_hal.cpp b/bcmdhd/wifi_hal/wifi_hal.cpp
+index 81cad8a..dc062ab 100644
+--- a/bcmdhd/wifi_hal/wifi_hal.cpp
++++ b/bcmdhd/wifi_hal/wifi_hal.cpp
+@@ -298,8 +298,7 @@ wifi_error wifi_initialize(wifi_handle *handle)
+ 
+     if ((wifi_add_membership(*handle, "scan") < 0) ||
+         (wifi_add_membership(*handle, "mlme")  < 0) ||
+-        (wifi_add_membership(*handle, "regulatory") < 0) ||
+-        (wifi_add_membership(*handle, "vendor") < 0)) {
++        (wifi_add_membership(*handle, "regulatory") < 0)) {
+         ALOGE("Add membership failed");
+         nl_socket_free(cmd_sock);
+         nl_socket_free(event_sock);
+@@ -308,6 +307,14 @@ wifi_error wifi_initialize(wifi_handle *handle)
+         return WIFI_ERROR_NOT_AVAILABLE;
+     }
+ 
++    // pisces: the 3.4-era bcmdhd driver does not publish the "vendor"
++    // multicast group, and the HAL used to fail initialization because of it
++    // ("Could not find group vendor" -> "Add membership failed" ->
++    // WIFI_ERROR_NOT_AVAILABLE).  Vendor event subscriptions just stay silent.
++    if (wifi_add_membership(*handle, "vendor") < 0) {
++        ALOGI("No vendor multicast group, vendor events disabled");
++    }
++
+     // ALOGI("Found %d interfaces", info->num_interfaces);
+ 
+     ALOGI("Initialized Wifi HAL Successfully; vendor cmd = %d", NL80211_CMD_VENDOR);

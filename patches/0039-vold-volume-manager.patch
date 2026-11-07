@@ -1,0 +1,21 @@
+diff --git a/VolumeManager.cpp b/VolumeManager.cpp
+index 58da887..62fb23e 100644
+--- a/VolumeManager.cpp
++++ b/VolumeManager.cpp
+@@ -351,7 +351,15 @@ int VolumeManager::linkPrimary(userid_t userId) {
+     std::string source(mPrimary->getPath());
+     if (mPrimary->getType() == android::vold::VolumeBase::Type::kEmulated) {
+         source = StringPrintf("%s/%d", source.c_str(), userId);
+-        fs_prepare_dir(source.c_str(), 0755, AID_ROOT, AID_ROOT);
++        /* pisces: there is no FUSE/sdcardfs here - /storage/<label>/0 IS the
++         * real storage directory (/data/media/0, bind-mounted), not a mount
++         * point hiding it.  fs_prepare_dir() chmods unconditionally, so the
++         * stock 0755 root:root turned the storage root read-only for everyone
++         * but root every time user 0 started: MtpServer's SendObject then
++         * failed with "Failed to create folder ...: Permission denied" and
++         * every host->phone transfer aborted.  Keep the relaxed mode that
++         * init.pisces.rc installs. */
++        fs_prepare_dir(source.c_str(), 0777, AID_ROOT, AID_ROOT);
+     }
+ 
+     std::string target(StringPrintf("/mnt/user/%d/primary", userId));

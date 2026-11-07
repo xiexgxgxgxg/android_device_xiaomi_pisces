@@ -1,0 +1,45 @@
+diff --git a/usbd/usbd.cpp b/usbd/usbd.cpp
+index 191fb92fb..c826e5ead 100644
+--- a/usbd/usbd.cpp
++++ b/usbd/usbd.cpp
+@@ -34,28 +34,17 @@ using android::hardware::usb::gadget::V1_0::IUsbGadget;
+ using android::hardware::Return;
+ 
+ int main(int /*argc*/, char** /*argv*/) {
+-    configureRpcThreadpool(1, true /*callerWillJoin*/);
+-
+-    android::sp<IUsbGadget> gadget = IUsbGadget::getService();
+-    Return<void> ret;
+-
+-    if (gadget != nullptr) {
+-        LOG(INFO) << "Usb HAL found.";
+-        std::string function = GetProperty(PERSISTENT_USB_CONFIG, "");
+-        if (function == "adb") {
+-            LOG(INFO) << "peristent prop is adb";
+-            SetProperty("ctl.start", "adbd");
+-            ret = gadget->setCurrentUsbFunctions(static_cast<uint64_t>(GadgetFunction::ADB),
+-                                                 nullptr, 0);
+-        } else {
+-            LOG(INFO) << "Signal MTP to enable default functions";
+-            ret = gadget->setCurrentUsbFunctions(static_cast<uint64_t>(GadgetFunction::MTP),
+-                                                 nullptr, 0);
+-        }
+-
+-        if (!ret.isOk()) LOG(ERROR) << "Error while invoking usb hal";
+-    } else {
+-        LOG(INFO) << "Usb HAL not found";
++    /* pisces: keep this daemon out of the composition business.  It is started
++     * from late_start, i.e. after init.pisces.rc has already installed the boot
++     * composition (mtp,adb) from this same property.  The stock fallback then
++     * replaced it with MTP only (idProduct 4ee1, adbd stopped, ffs unbound),
++     * which is why every boot came up without adb and with a gadget the
++     * framework had not asked for.  Starting adbd early is still useful because
++     * the ffs function needs it before the interface can bind. */
++    std::string function = GetProperty(PERSISTENT_USB_CONFIG, "");
++    if (function == "adb") {
++        LOG(INFO) << "persistent prop is adb";
++        SetProperty("ctl.start", "adbd");
+     }
+-    exit(0);
++    return 0;
+ }

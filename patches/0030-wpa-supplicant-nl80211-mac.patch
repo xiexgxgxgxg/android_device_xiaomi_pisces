@@ -1,0 +1,21 @@
+diff --git a/src/drivers/driver_nl80211.c b/src/drivers/driver_nl80211.c
+index 2ce03ed..dcef2ae 100644
+--- a/src/drivers/driver_nl80211.c
++++ b/src/drivers/driver_nl80211.c
+@@ -10174,6 +10174,16 @@ static int nl80211_write_to_file(const char *name, unsigned int val)
+ 
+ 	fd = open(name, O_RDWR);
+ 	if (fd < 0) {
++		/* pisces: the 3.4 kernel has no drop_unicast_in_l2_multicast /
++		 * drop_gratuitous_arp sysctls.  Treating that as a hard failure
++		 * made nl80211 deinit the interface and the framework could never
++		 * create ISupplicantStaIface ("Can't call setupIface"). */
++		if (errno == ENOENT) {
++			wpa_printf(MSG_DEBUG,
++				   "nl80211: %s not present, skipping filter",
++				   name);
++			return 0;
++		}
+ 		wpa_printf(MSG_ERROR, "nl80211: Failed to open %s: %s",
+ 			   name, strerror(errno));
+ 		return fd;
