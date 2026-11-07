@@ -453,3 +453,31 @@ Snap 拍出来是全黑（211851 字节、avg=1），测试 App 拍出来是正�
 
 顺带：`libcameraservice` 里所有 HIDL 调用已加 `isOk()` 检查（patch 0046），
 拍照不再把 cameraserver 打死（实测 0 次 Fatal signal）。
+
+### 15.2 结论：全黑 JPEG 的元凶是 flash-mode=auto
+
+用 `PiscesCamTest` 的 `photo` 模式（camera1 + SurfaceTexture）做二分，一次只加一组参数：
+
+| 参数组合 | 结果 |
+|---|---|
+| 全部默认（不设任何参数） | 正常（avg≈100，1.4–3.1 MB） |
+| Snap 全套参数 | **全黑（avg=1，211 KB）** |
+| 1–12（zsl/camera-mode/tsmakeup/xiaomi-still-beautify/bokeh/advancedFeature/scene/effect/…） | 正常 |
+| 13–18（antibanding/flash-mode/focus-mode/AE-lock/AWB-lock/picture-format） | **全黑** |
+| 13,14,15 | **全黑** |
+| 16,17,18 | 正常 |
+| **14 单独（`flash-mode=auto`）** | **全黑** |
+| 13 单独（antibanding=auto） | 正常 |
+| 15 单独（focus-mode=continuous-picture） | 正常 |
+| 预览 1024x768 / 旋转 90° / 缩略图 0x0 / jpeg-quality 85 | 都正常 |
+
+把 Snap 的 `pref_camera_flashmode_key` 改成 `off` 后，Snap 拍出 **1.4 MB、avg≈100 的正常照片**。
+
+所以：**只要闪光灯不是 off，2013 的 Tegra 相机 HAL 就返回空帧**（日志里那次会看到
+`onTorchStatusChangedLocked ... newStatus=1/0` 反复切换，然后 `EmptyStillBuffer` + `iso 0`）。
+
+处理：
+- 设备 overlay 里把 Snap 的默认闪光灯模式改成 `off`
+  （`overlay/packages/apps/Snap/res/values/config.xml`），避免默认拍出全黑；
+- 真正的修复要查 max77665 flash 这条路径（`/sys/class/leds/flashlight` 存在、
+  `CONFIG_MAX77665_FLASH=y`，但 HAL 在 flash != off 时的预闪/曝光时序会拿到空帧）。

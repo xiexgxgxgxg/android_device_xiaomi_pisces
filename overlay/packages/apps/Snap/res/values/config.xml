@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+     Snap (camera) defaults for pisces.
+
+     The still capture path of the 2013 Tegra camera HAL returns an empty frame
+     whenever the flash mode is not "off": the JPEG comes out uniformly black
+     (211 KB at 4208x3120, every pixel = 1) and the viewfinder dies afterwards.
+
+     Bisected with our own test app: with flash-mode=auto the capture is black,
+     with flash-mode=off it is a normal 1.4 MB photo, while all the other
+     parameters Snap sets (zsl, jpeg quality, thumbnail size, rotation, the
+     xiaomi-still-beautify set, ...) make no difference.
+
+     Default to "off" until the flash (max77665) path is fixed, so a fresh
+     install does not produce black photos.
+-->
+<resources>
+    <string name="pref_camera_flashmode_default" translatable="false">off</string>
+</resources>
