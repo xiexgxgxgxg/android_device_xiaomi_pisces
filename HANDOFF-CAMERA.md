@@ -285,7 +285,25 @@ service charger /sbin/chargeonlymode
   （`/data/anr/anr_2026-11-06-09-01-57-098`，所有线程都已恢复，无阻塞线程），
   之后反复切换/点灯都没有复现。
 
-## 十、历史背景（简）
+## 十一、仓库 / 补丁怎么落
+
+- **设备树**：`github.com/xiexgxgxgxg/android_device_xiaomi_pisces`（分支 `lineage-16.0`，已推送）
+- **相机 HAL（wrapper + camshim）**：`github.com/xiexgxgxgxg/android_hardware_nvidia`（分支 `lineage-16.0`，已推送）
+- **LineageOS 上游工程**（frameworks/av、system/core、hardware/interfaces、frameworks/base、
+  packages/apps/Settings、external/*、hardware/broadcom/*、hardware/ril、system/vold）没有推送权限，
+  改动全部以补丁形式放在本仓 `patches/`，repo sync 之后跑 `patches/apply-pisces-patches.sh` 复原：
+
+  | 补丁 | 内容 |
+  |---|---|
+  | 0028 | frameworks/av：相机 provider 重启不摘设备 + connect 等 provider；shim 参数缓存；torch 走 sysfs |
+  | 0029 | system/core：init 的 `androidboot.forcecharger=1` 调试开关 |
+  | 0030-0039 | 之前会话遗留在工作区、没进补丁的改动：双 provider 相机 HIDL、MTP/热点/USB、蓝牙/WiFi、vold、rild |
+
+  每个补丁都拿 `git show HEAD:<file>` 的干净副本试过一遍再和构建树对比，保证能干净应用。
+- **内核**（`kernel/xiaomi/pisces`）不是 git 工程：改过的文件整份放在 `kernel-patches/files/`
+  （`leds-lm3533.c`、`board-pisces.c`、`tegra11_pisces_user_defconfig`）。
+
+## 十二、历史背景（简）
 
 - 相机死锁的根因是 camshim 的 `SensorEventQueue` 桩自递归编译成 `b .`（死循环）
 - 单开驱动（imx135/ad5823/max77665-flash/tegra_camera）改成了引用计数
