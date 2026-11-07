@@ -1,0 +1,46 @@
+diff --git a/core/java/android/os/SELinux.java b/core/java/android/os/SELinux.java
+index 2773da54b00..003cdef49ab 100644
+--- a/core/java/android/os/SELinux.java
++++ b/core/java/android/os/SELinux.java
+@@ -114,7 +114,17 @@ public class SELinux {
+      */
+     public static boolean restorecon(String pathname) throws NullPointerException {
+         if (pathname == null) { throw new NullPointerException(); }
+-        return native_restorecon(pathname, 0);
++        if (!native_restorecon(pathname, 0)) {
++            // pisces: the 3.4 kernel cannot load the Android 9 policy, so no
++            // filesystem here supports security.* xattrs and every restorecon
++            // fails with EOPNOTSUPP.  We run permissive (nothing enforces the
++            // labels), so report success instead of failing the caller - an
++            // install, for instance, would otherwise abort with
++            // "INSTALL_FAILED_INSUFFICIENT_STORAGE: Failed rename".
++            Slog.w(TAG, "restorecon(" + pathname + ") failed, no SELinux policy (pisces)");
++            return true;
++        }
++        return true;
+     }
+ 
+     /**
+@@ -142,7 +152,7 @@ public class SELinux {
+      */
+     public static boolean restorecon(File file) throws NullPointerException {
+         try {
+-            return native_restorecon(file.getCanonicalPath(), 0);
++            return restorecon(file.getCanonicalPath());
+         } catch (IOException e) {
+             Slog.e(TAG, "Error getting canonical path. Restorecon failed for " +
+                     file.getPath(), e);
+@@ -160,7 +170,12 @@ public class SELinux {
+      */
+     public static boolean restoreconRecursive(File file) {
+         try {
+-            return native_restorecon(file.getCanonicalPath(), SELINUX_ANDROID_RESTORECON_RECURSE);
++            final String path = file.getCanonicalPath();
++            if (!native_restorecon(path, SELINUX_ANDROID_RESTORECON_RECURSE)) {
++                Slog.w(TAG, "restoreconRecursive(" + path
++                        + ") failed, no SELinux policy (pisces)");
++            }
++            return true;
+         } catch (IOException e) {
+             Slog.e(TAG, "Error getting canonical path. Restorecon failed for " +
+                     file.getPath(), e);

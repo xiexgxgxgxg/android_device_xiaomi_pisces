@@ -61,4 +61,10 @@ apply 0039-vold-volume-manager.patch               system/vold
 # (NvGrUnregisterBuffer dereferences a process-local pointer whose page was
 # already unmapped, killing SurfaceFlinger -> soft reboot).
 apply 0040-gralloc0-no-unregister.patch            hardware/interfaces
+# 0041/0042: the 3.4 kernel cannot load the Android 9 SELinux policy, so no
+# filesystem supports security.* xattrs and every restorecon fails with
+# EOPNOTSUPP.  Tolerate that in the framework, otherwise every app install dies
+# with "Failed to restorecon session dir" / "INSTALL_FAILED_INSUFFICIENT_STORAGE".
+apply 0041-frameworks-base-selinux-restorecon.patch  frameworks/base
+apply 0042-frameworks-base-packageinstaller-restorecon.patch frameworks/base
 echo "all patches applied"

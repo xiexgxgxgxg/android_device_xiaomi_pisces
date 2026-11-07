@@ -1,0 +1,18 @@
+diff --git a/services/core/java/com/android/server/pm/PackageInstallerService.java b/services/core/java/com/android/server/pm/PackageInstallerService.java
+index 5df53551b84..6cb810e2541 100644
+--- a/services/core/java/com/android/server/pm/PackageInstallerService.java
++++ b/services/core/java/com/android/server/pm/PackageInstallerService.java
+@@ -692,7 +692,12 @@ public class PackageInstallerService extends IPackageInstaller.Stub {
+         }
+ 
+         if (!SELinux.restorecon(stageDir)) {
+-            throw new IOException("Failed to restorecon session dir: " + stageDir);
++            // pisces: the 3.4 kernel cannot load the Android 9 SELinux policy,
++            // so no filesystem supports security.* xattrs and restorecon always
++            // fails (EOPNOTSUPP).  We run permissive, where labels are not
++            // enforced, so carry on instead of failing every installation.
++            Slog.w(TAG, "Failed to restorecon session dir: " + stageDir
++                    + "; continuing without SELinux policy (pisces)");
+         }
+     }
+ 
