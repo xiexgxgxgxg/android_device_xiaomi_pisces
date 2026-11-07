@@ -1,0 +1,61 @@
+diff --git a/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h b/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
+index 7369ac75..3819b106 100644
+--- a/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
++++ b/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
+@@ -75,24 +75,47 @@ class Gralloc0HalImpl : public Hal {
+ 
+     Error importBuffer(const native_handle_t* rawHandle,
+                        native_handle_t** outBufferHandle) override {
+-        native_handle_t* bufferHandle = native_handle_clone(rawHandle);
+-        if (!bufferHandle) {
+-            return Error::NO_RESOURCES;
++        if (rawHandle == nullptr) {
++            return Error::BAD_BUFFER;
+         }
+ 
+-        if (mModule->registerBuffer(mModule, bufferHandle)) {
+-            native_handle_close(bufferHandle);
+-            native_handle_delete(bufferHandle);
+-            return Error::BAD_BUFFER;
++        /*
++         * pisces: keep a private copy of the handle, but do not register it
++         * with the gralloc module.
++         *
++         * Android 9 moves the composer into its own process, so the composer
++         * HAL has to import every layer buffer and keep its own copy of the
++         * handle alive.  The 2013 nvgralloc handles (NvNativeHandle, 43
++         * private ints) contain process-local pointers - for example the
++         * fence array pointer at handle+0x80 - and native_handle_clone()
++         * copies those verbatim.  They are harmless for register/lock/display
++         * (which only need the fd and the numeric fields), but
++         * NvGrUnregisterBuffer() dereferences that pointer when the buffer is
++         * freed:
++         *
++         *   NvGrUnregisterBuffer+26: ldr r3, [handle, #0x80]
++         *                            ldr r0, [r3, #0x10]  <- SIGSEGV
++         *
++         * which kills the composer service, then SurfaceFlinger, then zygote
++         * ("onrestart restart zygote" in surfaceflinger.rc) - the soft reboot.
++         *
++         * The copy is only used as a lifetime container here: no gralloc
++         * state is created for it, and freeBuffer() just drops it again.
++         */
++        native_handle_t* bufferHandle = native_handle_clone(rawHandle);
++        if (bufferHandle == nullptr) {
++            return Error::NO_RESOURCES;
+         }
+ 
+         *outBufferHandle = bufferHandle;
+-
+         return Error::NONE;
+     }
+ 
+     Error freeBuffer(native_handle_t* bufferHandle) override {
+-        if (mModule->unregisterBuffer(mModule, bufferHandle)) {
++        /* pisces: nothing was registered in importBuffer(), so there is
++         * nothing to unregister - calling NvGrUnregisterBuffer() on the copy
++         * crashes (see importBuffer()). */
++        if (bufferHandle == nullptr) {
+             return Error::BAD_BUFFER;
+         }
+ 
