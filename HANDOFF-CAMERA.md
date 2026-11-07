@@ -302,6 +302,12 @@ service charger /sbin/chargeonlymode
   每个补丁都拿 `git show HEAD:<file>` 的干净副本试过一遍再和构建树对比，保证能干净应用。
 - **内核**（`kernel/xiaomi/pisces`）不是 git 工程：改过的文件整份放在 `kernel-patches/files/`
   （`leds-lm3533.c`、`board-pisces.c`、`tegra11_pisces_user_defconfig`）。
+  内核另有独立仓库 `github.com/xiexgxgxgxg/android_kernel_xiaomi_pisces`（分支 `lineage-16.0-113`，
+  `/data/twrp/kernel/src`），官方源码在 `/data/twrp/kernel/stock-src`（分支 `pisces-kk-oss`）。
+- **源码备份**：`/data/twrp/pisces-src-backup/`（镜像 `~/lineage-dev/pisces-src-backup-20261107/`）
+  同时存了"我们改过的那 50 个文件的官方版本"和"我们的版本"，附 `scripts/restore-official.sh`、
+  `restore-modified.sh`、`verify.sh`。这套源码以后要给别的机器用时，先跑 `restore-official.sh`
+  回到 LineageOS 官方源码，再按 `patches/` 里对新机器的部分重新打补丁即可。
 
 ## 十二、历史背景（简）
 
