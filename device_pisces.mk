@@ -319,3 +319,12 @@ PRODUCT_COPY_FILES += \
 PRODUCT_PACKAGES := $(filter-out NfcNci,$(PRODUCT_PACKAGES))
 
 PRODUCT_PACKAGES += PiscesStub
+
+# pisces: the OMX HAL has to run from /system/bin so its linker namespace can
+# load the Nvidia components (libnvomx*.so in /system/lib) together with the
+# NVOMXPlugin shim; a vendor process cannot reach those libraries and the
+# framework then only sees the software codecs.  See
+# frameworks/av/services/mediacodec/android.hardware.media.omx@1.0-service.rc.
+PRODUCT_COPY_FILES += \
+    device/xiaomi/pisces/prebuilt/media_omx_service:system/bin/media_omx_service \
+    device/xiaomi/pisces/prebuilt/libstagefrighthw.so:system/lib/libstagefrighthw.so

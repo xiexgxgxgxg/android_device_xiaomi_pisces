@@ -701,3 +701,30 @@ I CameraWrapper: camera_fixup_setparams: forcing flash-mode off (requested 'auto
   （录像时屏幕预览会没有，除非再加一路）；
 - **B** 在相机服务里实现 `setPreviewCallbackTarget`，把录像 Surface 当预览口（同样牺牲屏幕预览）；
 - **C** 写一个用 YUV 预览回调 + 软件编码器的录像 App（不依赖 MediaRecorder 的相机通路）。
+
+### 16.7 录像与播放打通（2026-11-08 18:55）
+
+**录像（已修好）**
+
+- 相机服务没有 `setPreviewCallbackTarget`，Snap 的 `VideoSource.CAMERA` 永远拿不到帧；
+  改成 **`VideoSource.SURFACE`** + 把 `MediaRecorder.getSurface()` 交给相机当预览口
+  （`VideoModule.setupCameraForRecorderSurface()`，patch 0048）。
+- 副作用：录像时屏幕上看不到取景画面（相机只输出到编码器），停止后恢复。
+- `mediaserver` 之前带 init 的 umask 077 启动，录出来的 mp4 是 0600，相册读不了 →
+  在 `main_mediaserver.cpp` 里 `umask(0022)`。
+
+验证：录 6 秒得到 **7.8 MB** 的 MP4：`ftyp/moov/mdat` 齐全、`avc1`+`avcC`+`mp4a`、
+视频轨 **119 个 sample**；相册能播放。
+
+**播放（已修好）**
+
+Nvidia 的 h264 **解码器**（`OMX.Nvidia.h264.decode`）在 NuPlayer 下报
+`0x80001000` 后失败；在 `device/xiaomi/pisces/media/media_codecs.xml` 里把它注掉，
+改用软件解码器（`OMX.google.h264.decoder`），播放正常（截图确认有画面）。
+
+**OMX 服务改为 system 进程（可复现）**
+
+`frameworks/av/services/mediacodec/android.hardware.media.omx@1.0-service.rc`
+改成启动 `/system/bin/media_omx_service`；`device_pisces.mk` 负责把
+`prebuilt/media_omx_service` 和 `prebuilt/libstagefrighthw.so` 装到 `/system/bin`
+和 `/system/lib`。
