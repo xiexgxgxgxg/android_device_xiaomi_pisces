@@ -662,3 +662,18 @@ I CameraWrapper: camera_fixup_setparams: forcing flash-mode off (requested 'auto
 - 拍照瞬间电池电流从 ~0.2–0.5 A 跳到 **~1.4 A**，确认 LED 真的点亮。
 
 注意：点灯时间约 1 秒（到 JPEG 回调才关），比真正的闪光灯长，但功能上可用。
+
+### 16.5 2026-11-08 15:15 最终状态（kernel #232）
+
+镜像：`/data/lineage-16.0/out/target/product/pisces/lineage-16.0-20261108-UNOFFICIAL-pisces.zip`
+（`BUILD_RC=0`，已刷入）
+
+| 项 | 状态 |
+|---|---|
+| 虚拟导航栏按不动 | **已修**：`interceptKeyBeforeQueueing` 里原来把所有 HOME/BACK/MENU/APP_SWITCH 都吞掉，连导航栏自己注入的按键也被吞了；改成只吞**非注入**事件（`!isInjected`）。实测：设置里点导航栏返回键能退回桌面，物理键仍被屏蔽 |
+| 相册灰图 | **已修**：sdcard 递归修权限（目录 0777 / 文件 0666） |
+| 拍照（任何闪光灯设置） | **正常**：wrapper 把 supported-flash-modes 只报 off，照片 1.46 MB、亮度 110.7 |
+| 闪光灯真点亮 | **不可用**：LED 本身能亮（sysfs 255 → 电流 +600 mA），但 HAL 的闪光拍照路径永远返回空帧（只 arm 不触发 strobe），已在 wrapper 里隐藏闪光灯选项，避免拍出全黑 |
+| WiFi 信号 | 已修（连接时 -29 dBm / 65Mbps）；本次开机热点未开，显示未连接 |
+| 录像 | 仍不可用（软件编码器 metadata buffer 报错，Nvidia OMX 缺 plugin） |
+| composer 偶发软重启 | 仍存在（ANR 抓到 system_server 等 AMS/WindowHashMap 锁、SF 被 crash_dump 占用；composer 进程本身空闲），需要继续查 SF 与 composer 的交互 |
