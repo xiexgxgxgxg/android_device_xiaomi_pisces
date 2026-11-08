@@ -1,5 +1,5 @@
 diff --git a/src/com/android/camera/VideoModule.java b/src/com/android/camera/VideoModule.java
-index 190cc248a..912222d06 100644
+index 190cc248a..43d44daa1 100644
 --- a/src/com/android/camera/VideoModule.java
 +++ b/src/com/android/camera/VideoModule.java
 @@ -17,6 +17,8 @@
@@ -19,13 +19,11 @@ index 190cc248a..912222d06 100644
  import android.view.SurfaceHolder;
  import android.view.View;
  import android.view.WindowManager;
-@@ -1631,6 +1634,118 @@ public class VideoModule implements CameraModule,
+@@ -1631,6 +1634,87 @@ public class VideoModule implements CameraModule,
          }
      }
  
 +    /** Minimal SurfaceHolder that just carries a Surface to Camera.setPreviewDisplay(). */
-+    private PreviewMirror mPreviewMirror;
-+
 +    private static class RecorderSurfaceHolder implements SurfaceHolder {
 +        private final Surface mSurface;
 +
@@ -93,52 +91,23 @@ index 190cc248a..912222d06 100644
 +
 +    /**
 +     * pisces: point the camera preview at the media recorder's surface so the
-+     * hardware encoder receives frames (the CAMERA video source cannot work here).
++     * hardware encoder receives frames (the CAMERA video source cannot work
++     * here).  The on-screen preview is taken over by the encoder while
++     * recording; stopping the recording restores it.
 +     */
 +    private void setupCameraForRecorderSurface(Surface surface) {
 +        stopPreview();
-+        // Mirror the camera preview into both the screen and the encoder surface:
-+        // the camera itself can only feed one of them.
-+        if (mPreviewMirror == null) {
-+            mPreviewMirror = new PreviewMirror();
-+            mPreviewMirror.setDefaultBufferSize(mProfile.videoFrameWidth,
-+                    mProfile.videoFrameHeight);
-+        }
-+        mCameraDevice.setPreviewTexture(mPreviewMirror.getSurfaceTexture());
++        mCameraDevice.setPreviewDisplay(new RecorderSurfaceHolder(surface));
 +        mCameraDevice.setDisplayOrientation(
 +                CameraUtil.getDisplayOrientation(mDisplayRotation, mCameraId));
 +        mCameraDevice.startPreview();
 +        mPreviewing = true;
-+        // Connect EGL only after the camera has taken the texture, otherwise the
-+        // SurfaceView is still owned by the camera and eglCreateWindowSurface
-+        // fails with "already connected to another API".
-+        if (mPreviewMirror.start(mUI.getSurfaceHolder().getSurface())) {
-+            mPreviewMirror.setRecorderSurface(surface);
-+        } else {
-+            Log.w(TAG, "preview mirror unavailable, recording without a viewfinder");
-+            mPreviewMirror.stop();
-+            mPreviewMirror = null;
-+        }
-+    }
-+
-+    /** Stops the preview mirror and points the camera back at the screen. */
-+    private void stopPreviewMirror() {
-+        if (mPreviewMirror == null) {
-+            return;
-+        }
-+        mPreviewMirror.setRecorderSurface(null);
-+        mPreviewMirror.stop();
-+        mPreviewMirror = null;
-+        if (mCameraDevice != null) {
-+            stopPreview();
-+            startPreview();
-+        }
 +    }
 +
      private void setupMediaRecorderPreviewDisplay() {
          mFocusManager.resetTouchFocus();
          // Nothing to do here if using SurfaceTexture.
-@@ -1733,9 +1848,12 @@ public class VideoModule implements CameraModule,
+@@ -1733,9 +1817,10 @@ public class VideoModule implements CameraModule,
          }
          mMediaRecorder = new MediaRecorder();
  
@@ -146,15 +115,13 @@ index 190cc248a..912222d06 100644
 -        mCameraDevice.unlock();
 -        mMediaRecorder.setCamera(mCameraDevice.getCamera());
 +        // pisces: the camera1 service cannot hand the camera's preview frames to
-+        // the recorder - CameraClient::setPreviewCallbackTarget() is unimplemented
-+        // in LineageOS 16 and the vendor HAL has no second output either, so a
-+        // CAMERA-source recording gets an empty video track (no moov, no NALs).
-+        // Record through the recorder's own surface instead and feed the camera
-+        // into it.
++        // the recorder (CameraClient::setPreviewCallbackTarget() is unimplemented
++        // and the vendor HAL has no second output), so record through the
++        // recorder's own surface instead.
  
          String hfr = ParametersWrapper.getVideoHighFrameRate(mParameters);
          String hsr =  mParameters.get(CameraSettings.KEY_VIDEO_HSR);
-@@ -1752,7 +1870,7 @@ public class VideoModule implements CameraModule,
+@@ -1752,7 +1837,7 @@ public class VideoModule implements CameraModule,
              Log.e(TAG, "Invalid hfr(" + hfr + ") or hsr(" + hsr + ")");
          }
  
@@ -163,16 +130,41 @@ index 190cc248a..912222d06 100644
  
          mProfile.videoCodec = mVideoEncoder;
          mProfile.audioCodec = mAudioEncoder;
-@@ -1872,6 +1990,17 @@ public class VideoModule implements CameraModule,
+@@ -1853,13 +1938,19 @@ public class VideoModule implements CameraModule,
+         // what activity.getWindowManager().getDefaultDisplay().getRotation() would return,
+         // which is the orientation the graphics need to rotate in order to render correctly.
+         int rotation = 0;
+-        if (mOrientation != OrientationEventListener.ORIENTATION_UNKNOWN) {
+-            CameraHolder.CameraInfo info = CameraHolder.instance().getCameraInfo()[mCameraId];
+-            if (info.facing == CameraHolder.CameraInfo.CAMERA_FACING_FRONT) {
+-                rotation = (info.orientation - mOrientation - mOrientationOffset + 360) % 360;
+-            } else {  // back-facing camera
+-                rotation = (info.orientation + mOrientation + mOrientationOffset) % 360;
+-            }
++        CameraHolder.CameraInfo info = CameraHolder.instance().getCameraInfo()[mCameraId];
++        int deviceOrientation = mOrientation;
++        if (deviceOrientation == OrientationEventListener.ORIENTATION_UNKNOWN) {
++            // pisces: the orientation listener never delivers a value on this
++            // device, so fall back to the display rotation - otherwise portrait
++            // recordings were saved as landscape (rotation hint 0).
++            deviceOrientation = (mDisplayRotation * 90) % 360;
++            Log.v(TAG, "using display rotation for the video orientation: " + deviceOrientation);
++        }
++        if (info.facing == CameraHolder.CameraInfo.CAMERA_FACING_FRONT) {
++            rotation = (info.orientation - deviceOrientation - mOrientationOffset + 360) % 360;
++        } else {  // back-facing camera
++            rotation = (info.orientation + deviceOrientation + mOrientationOffset) % 360;
+         }
+         mMediaRecorder.setOrientationHint(rotation);
+         setupMediaRecorderPreviewDisplay();
+@@ -1872,6 +1963,15 @@ public class VideoModule implements CameraModule,
              throw new RuntimeException(e);
          }
  
-+        // pisces: hand the recorder's surface to the camera so the encoder gets
-+        // the preview frames.  The on-screen preview is taken over by the encoder
-+        // while recording; stopping the recording restores it.
++        // pisces: hand the recorder surface to the camera so the encoder gets
++        // the preview frames.
 +        try {
 +            Surface recorderSurface = mMediaRecorder.getSurface();
-+            Log.v(TAG, "recording into camera surface " + recorderSurface);
 +            setupCameraForRecorderSurface(recorderSurface);
 +        } catch (IllegalStateException e) {
 +            Log.e(TAG, "cannot get the recorder surface", e);
@@ -181,13 +173,3 @@ index 190cc248a..912222d06 100644
          mMediaRecorder.setOnErrorListener(this);
          mMediaRecorder.setOnInfoListener(this);
      }
-@@ -2272,6 +2401,9 @@ public class VideoModule implements CameraModule,
-         // release media recorder
-         releaseMediaRecorder();
-         releaseAudioFocus();
-+        if (!mPaused) {
-+            stopPreviewMirror();
-+        }
-         if (!mPaused) {
-             mCameraDevice.lock();
-             if (!ApiHelper.HAS_SURFACE_TEXTURE_RECORDING) {
