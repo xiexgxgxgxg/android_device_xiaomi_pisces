@@ -1,0 +1,150 @@
+diff --git a/src/com/android/camera/VideoModule.java b/src/com/android/camera/VideoModule.java
+index 190cc248a..3e873f74c 100644
+--- a/src/com/android/camera/VideoModule.java
++++ b/src/com/android/camera/VideoModule.java
+@@ -17,6 +17,8 @@
+ 
+ package com.android.camera;
+ 
++import android.graphics.Canvas;
++import android.graphics.Rect;
+ import android.annotation.TargetApi;
+ import android.app.Activity;
+ import android.content.ActivityNotFoundException;
+@@ -54,6 +56,7 @@ import android.provider.MediaStore.Video;
+ import android.util.Log;
+ import android.view.KeyEvent;
+ import android.view.OrientationEventListener;
++import android.view.Surface;
+ import android.view.SurfaceHolder;
+ import android.view.View;
+ import android.view.WindowManager;
+@@ -1631,6 +1634,85 @@ public class VideoModule implements CameraModule,
+         }
+     }
+ 
++    /** Minimal SurfaceHolder that just carries a Surface to Camera.setPreviewDisplay(). */
++    private static class RecorderSurfaceHolder implements SurfaceHolder {
++        private final Surface mSurface;
++
++        RecorderSurfaceHolder(Surface surface) {
++            mSurface = surface;
++        }
++
++        @Override
++        public Surface getSurface() {
++            return mSurface;
++        }
++
++        @Override
++        public void addCallback(Callback callback) {
++        }
++
++        @Override
++        public void removeCallback(Callback callback) {
++        }
++
++        @Override
++        public boolean isCreating() {
++            return false;
++        }
++
++        @Override
++        public void setType(int type) {
++        }
++
++        @Override
++        public void setFixedSize(int width, int height) {
++        }
++
++        @Override
++        public void setSizeFromLayout() {
++        }
++
++        @Override
++        public void setFormat(int format) {
++        }
++
++        @Override
++        public void setKeepScreenOn(boolean screenOn) {
++        }
++
++        @Override
++        public Canvas lockCanvas() {
++            return null;
++        }
++
++        @Override
++        public Canvas lockCanvas(Rect dirty) {
++            return null;
++        }
++
++        @Override
++        public void unlockCanvasAndPost(Canvas canvas) {
++        }
++
++        @Override
++        public Rect getSurfaceFrame() {
++            return null;
++        }
++    }
++
++    /**
++     * pisces: point the camera preview at the media recorder's surface so the
++     * hardware encoder receives frames (the CAMERA video source cannot work here).
++     */
++    private void setupCameraForRecorderSurface(Surface surface) {
++        stopPreview();
++        mCameraDevice.setPreviewDisplay(new RecorderSurfaceHolder(surface));
++        mCameraDevice.setDisplayOrientation(
++                CameraUtil.getDisplayOrientation(mDisplayRotation, mCameraId));
++        mCameraDevice.startPreview();
++        mPreviewing = true;
++    }
++
+     private void setupMediaRecorderPreviewDisplay() {
+         mFocusManager.resetTouchFocus();
+         // Nothing to do here if using SurfaceTexture.
+@@ -1733,9 +1815,12 @@ public class VideoModule implements CameraModule,
+         }
+         mMediaRecorder = new MediaRecorder();
+ 
+-        // Unlock the camera object before passing it to media recorder.
+-        mCameraDevice.unlock();
+-        mMediaRecorder.setCamera(mCameraDevice.getCamera());
++        // pisces: the camera1 service cannot hand the camera's preview frames to
++        // the recorder - CameraClient::setPreviewCallbackTarget() is unimplemented
++        // in LineageOS 16 and the vendor HAL has no second output either, so a
++        // CAMERA-source recording gets an empty video track (no moov, no NALs).
++        // Record through the recorder's own surface instead and feed the camera
++        // into it.
+ 
+         String hfr = ParametersWrapper.getVideoHighFrameRate(mParameters);
+         String hsr =  mParameters.get(CameraSettings.KEY_VIDEO_HSR);
+@@ -1752,7 +1837,7 @@ public class VideoModule implements CameraModule,
+             Log.e(TAG, "Invalid hfr(" + hfr + ") or hsr(" + hsr + ")");
+         }
+ 
+-        mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.CAMERA);
++        mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
+ 
+         mProfile.videoCodec = mVideoEncoder;
+         mProfile.audioCodec = mAudioEncoder;
+@@ -1872,6 +1957,17 @@ public class VideoModule implements CameraModule,
+             throw new RuntimeException(e);
+         }
+ 
++        // pisces: hand the recorder's surface to the camera so the encoder gets
++        // the preview frames.  The on-screen preview is taken over by the encoder
++        // while recording; stopping the recording restores it.
++        try {
++            Surface recorderSurface = mMediaRecorder.getSurface();
++            Log.v(TAG, "recording into camera surface " + recorderSurface);
++            setupCameraForRecorderSurface(recorderSurface);
++        } catch (IllegalStateException e) {
++            Log.e(TAG, "cannot get the recorder surface", e);
++        }
++
+         mMediaRecorder.setOnErrorListener(this);
+         mMediaRecorder.setOnInfoListener(this);
+     }

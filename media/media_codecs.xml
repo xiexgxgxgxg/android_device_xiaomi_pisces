@@ -79,7 +79,8 @@ Only the three quirks included above are recognized at this point:
     <Decoders>
         <MediaCodec name="OMX.Nvidia.mp4.decode" type="video/mp4v-es" />
         <MediaCodec name="OMX.Nvidia.h263.decode" type="video/3gpp" />
-        <MediaCodec name="OMX.Nvidia.h264.decode" type="video/avc" />
+        <!-- pisces: the Nvidia h264 decoder errors out with 0x80001000 under
+             NuPlayer, so fall back to the software decoder for playback. -->
         <MediaCodec name="OMX.Nvidia.mpeg2v.decode" type="video/mpeg2" />
         <MediaCodec name="OMX.Nvidia.mp3.decoder">
             <Type name="audio/mpeg" />

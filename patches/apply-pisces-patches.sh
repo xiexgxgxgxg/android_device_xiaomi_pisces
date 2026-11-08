@@ -89,4 +89,8 @@ apply 0048-wificond-16bit-bitrate.patch                system/connectivity/wific
 # 0047: CameraService::getCameraInfo() must wait for the restarted provider,
 # otherwise Snap crashes with "Fail to get camera info" when entering video mode.
 apply 0047-frameworks-av-camera-info-wait.patch         frameworks/av
+# 0048: Snap must record through the recorder surface; the camera1 service has no
+# working CameraClient::setPreviewCallbackTarget(), so CAMERA-source recordings
+# end up with an empty video track.
+apply 0048-snap-video-surface-source.patch             packages/apps/Snap
 echo "all patches applied"
