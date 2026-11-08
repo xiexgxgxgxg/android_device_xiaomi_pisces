@@ -617,3 +617,26 @@ I CameraWrapper: camera_fixup_setparams: forcing flash-mode off (requested 'auto
 验证：Snap 设成“自动闪光灯”拍照 → 1.06 MB、平均亮度 99.2 的正常照片
 （以前是 211 KB 全黑）。这样“开不开闪光灯都一样能拍出正常照片”，代价是 LED 不会亮；
 真正的闪光灯修复（让 HAL 触发 strobe）仍待做。
+
+### 16.3 上午收尾状态（2026-11-08 08:25）
+
+已刷入最终镜像（kernel `#229`，OTA `lineage-16.0-20261107-UNOFFICIAL-pisces.zip`，`BUILD_RC=0`）。
+
+已验证：
+- 拍照（含“自动闪光灯”设置）：正常图片（1.3 MB、平均亮度 106）；
+- 相册显示：正常（截图像素有 166 种取值，不是灰块）；
+- 开机后 `Fatal signal` = 0，负载正常；
+- `DCIM/Camera` 目录已是 0777（递归修权限生效）；
+- WiFi RSSI 修复（连接时 -29 dBm / 65 Mbps；本次开机热点未连上，属环境原因）。
+
+仍未解决：
+1. **录像**：`MediaRecorder: start failed: -19 / UNKNOWN_ERROR`，软件编码器
+   `OMX.google.h264.encoder` 收到 8 字节的 metadata buffer 后报
+   “Buffer size is too small / useBuffer BadParameter”；Nvidia 的 OMX 组件因为
+   缺少 `libstagefrighthw.so`（OMX plugin）且库都在 `/system/lib`（vendor 进程
+   namespace 看不到）而无法枚举。要继续需要补 plugin + 把库搬进 `/vendor/lib`，
+   或改走软件编码器的原生长缓冲模式。
+2. **闪光灯真正点亮**：HAL 不触发 strobe（已在 wrapper 里强制 flash off 规避，
+   照片不再全黑，但 LED 不会亮）。
+3. **composer 偶发软重启**：目前是上游行为（偶发）；彻底修需要让 composer 不
+   import/register 图层 buffer。
