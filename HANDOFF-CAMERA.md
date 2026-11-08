@@ -640,3 +640,25 @@ I CameraWrapper: camera_fixup_setparams: forcing flash-mode off (requested 'auto
    照片不再全黑，但 LED 不会亮）。
 3. **composer 偶发软重启**：目前是上游行为（偶发）；彻底修需要让 composer 不
    import/register 图层 buffer。
+
+### 16.4 闪光灯：改成 wrapper 自己点灯（已实现并验证）
+
+关键发现：**LED 本身是好的**。用电池电流做客观验证：
+
+| 状态 | `max170xx_battery/current_now` |
+|---|---|
+| LED off | ~79 mA |
+| `echo 255 > /sys/class/leds/flashlight/brightness` | **~694 mA**（多出约 600 mA 就是 LED） |
+
+所以不用再挖 HAL 的 strobe 语义，改成由我们自己的 wrapper 控制 torch LED：
+
+- `take_picture()` 时先向 HAL 查 `flash-mode`，如果不是 off：
+  - 把参数改成 `off` 再 `set_parameters()`（保证 still 用正确曝光）；
+  - 把 `/sys/class/leds/flashlight/brightness` 写 255 点灯；
+- JPEG 回调（`CAMERA_MSG_COMPRESSED_IMAGE`）里写 0 关灯。
+
+实测：
+- 照片 **1,395,397 字节、平均亮度 108.8**（之前闪光灯 on 是 212 KB 全黑）；
+- 拍照瞬间电池电流从 ~0.2–0.5 A 跳到 **~1.4 A**，确认 LED 真的点亮。
+
+注意：点灯时间约 1 秒（到 JPEG 回调才关），比真正的闪光灯长，但功能上可用。
