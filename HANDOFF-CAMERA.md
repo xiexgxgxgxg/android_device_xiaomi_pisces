@@ -677,3 +677,27 @@ I CameraWrapper: camera_fixup_setparams: forcing flash-mode off (requested 'auto
 | WiFi 信号 | 已修（连接时 -29 dBm / 65Mbps）；本次开机热点未开，显示未连接 |
 | 录像 | 仍不可用（软件编码器 metadata buffer 报错，Nvidia OMX 缺 plugin） |
 | composer 偶发软重启 | 仍存在（ANR 抓到 system_server 等 AMS/WindowHashMap 锁、SF 被 crash_dump 占用；composer 进程本身空闲），需要继续查 SF 与 composer 的交互 |
+
+### 16.6 录像：硬件编码器已通，但相机不送帧（2026-11-08 18:40）
+
+已做：把 `media.omx` 服务改成 **system 进程**（`/system/bin/media_omx_service` +
+`libstagefrighthw.so`），框架现在能实例化 `OMX.Nvidia.h264.encoder`（见 `omx-system/`）。
+
+但录像仍然出不了可播放文件：
+- 生成 400 KB–1.2 MB 的 mp4，**没有 `moov`**；
+- `mdat` 里 **0 个 H.264 NAL 单元**（不是视频数据）；
+- 日志 `MPEG4Writer: Stop() called but track is not started` → 视频轨道从没收到帧。
+
+根因链：
+1. Snap 录像用 `MediaRecorder.VideoSource.CAMERA`（`VideoModule.java:1755`），这条老路要求
+   相机服务实现 `CameraClient::setPreviewCallbackTarget()`，而 LineageOS 16 的 camera1
+   服务里它是 **未实现** 的：
+   `ALOGE("%s: Unimplemented!", __FUNCTION__); return INVALID_OPERATION;`
+   （`frameworks/av/services/camera/libcameraservice/api1/CameraClient.cpp:369`）；
+2. 厂商 HAL（`camera.tegra.so`）也没有导出 `set_preview_callback_target`，没有第二条输出通路。
+
+可选方案：
+- **A** 改 Snap 用 `VideoSource.SURFACE` + `MediaRecorder.getSurface()` 当相机预览口
+  （录像时屏幕预览会没有，除非再加一路）；
+- **B** 在相机服务里实现 `setPreviewCallbackTarget`，把录像 Surface 当预览口（同样牺牲屏幕预览）；
+- **C** 写一个用 YUV 预览回调 + 软件编码器的录像 App（不依赖 MediaRecorder 的相机通路）。
