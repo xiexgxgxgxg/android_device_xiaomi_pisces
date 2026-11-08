@@ -1,0 +1,6 @@
+service media_omx_system /system/bin/media_omx_service
+    class main
+    user mediacodec
+    group camera drmrpc mediadrm
+    ioprio rt 4
+    writepid /dev/cpuset/foreground/tasks
