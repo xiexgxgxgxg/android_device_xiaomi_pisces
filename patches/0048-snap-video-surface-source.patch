@@ -1,5 +1,5 @@
 diff --git a/src/com/android/camera/VideoModule.java b/src/com/android/camera/VideoModule.java
-index 190cc248a..43d44daa1 100644
+index 190cc248a..1f7678d44 100644
 --- a/src/com/android/camera/VideoModule.java
 +++ b/src/com/android/camera/VideoModule.java
 @@ -17,6 +17,8 @@
@@ -11,7 +11,15 @@ index 190cc248a..43d44daa1 100644
  import android.annotation.TargetApi;
  import android.app.Activity;
  import android.content.ActivityNotFoundException;
-@@ -54,6 +56,7 @@ import android.provider.MediaStore.Video;
+@@ -42,6 +44,7 @@ import android.media.MediaRecorder;
+ import android.media.MediaMetadataRetriever;
+ import android.net.Uri;
+ import android.os.Build;
++import android.os.HandlerThread;
+ import android.os.Bundle;
+ import android.os.Handler;
+ import android.os.Message;
+@@ -54,6 +57,7 @@ import android.provider.MediaStore.Video;
  import android.util.Log;
  import android.view.KeyEvent;
  import android.view.OrientationEventListener;
@@ -19,11 +27,23 @@ index 190cc248a..43d44daa1 100644
  import android.view.SurfaceHolder;
  import android.view.View;
  import android.view.WindowManager;
-@@ -1631,6 +1634,87 @@ public class VideoModule implements CameraModule,
+@@ -97,6 +101,12 @@ public class VideoModule implements CameraModule,
+     MediaRecorder.OnErrorListener,
+     MediaRecorder.OnInfoListener {
+ 
++    private PreviewVideoRecorder mPreviewRecorder;
++    private int mMediaRecorderRotationHint;
++    private HandlerThread mRecorderThread;
++    private Handler mRecorderHandler;
++    private byte[] mRecorderBuffer;
++    private String mVideoTempPath;
+     private static final String TAG = "CAM_VideoModule";
+ 
+     private static final int CHECK_DISPLAY_ROTATION = 3;
+@@ -1631,6 +1641,80 @@ public class VideoModule implements CameraModule,
          }
      }
  
-+    /** Minimal SurfaceHolder that just carries a Surface to Camera.setPreviewDisplay(). */
 +    private static class RecorderSurfaceHolder implements SurfaceHolder {
 +        private final Surface mSurface;
 +
@@ -89,12 +109,6 @@ index 190cc248a..43d44daa1 100644
 +        }
 +    }
 +
-+    /**
-+     * pisces: point the camera preview at the media recorder's surface so the
-+     * hardware encoder receives frames (the CAMERA video source cannot work
-+     * here).  The on-screen preview is taken over by the encoder while
-+     * recording; stopping the recording restores it.
-+     */
 +    private void setupCameraForRecorderSurface(Surface surface) {
 +        stopPreview();
 +        mCameraDevice.setPreviewDisplay(new RecorderSurfaceHolder(surface));
@@ -107,30 +121,48 @@ index 190cc248a..43d44daa1 100644
      private void setupMediaRecorderPreviewDisplay() {
          mFocusManager.resetTouchFocus();
          // Nothing to do here if using SurfaceTexture.
-@@ -1733,9 +1817,10 @@ public class VideoModule implements CameraModule,
+@@ -1733,9 +1817,8 @@ public class VideoModule implements CameraModule,
          }
          mMediaRecorder = new MediaRecorder();
  
 -        // Unlock the camera object before passing it to media recorder.
 -        mCameraDevice.unlock();
 -        mMediaRecorder.setCamera(mCameraDevice.getCamera());
-+        // pisces: the camera1 service cannot hand the camera's preview frames to
-+        // the recorder (CameraClient::setPreviewCallbackTarget() is unimplemented
-+        // and the vendor HAL has no second output), so record through the
-+        // recorder's own surface instead.
++        // pisces: record through the recorder surface - the camera1 service has
++        // no working setPreviewCallbackTarget() and the HAL has no second output.
  
          String hfr = ParametersWrapper.getVideoHighFrameRate(mParameters);
          String hsr =  mParameters.get(CameraSettings.KEY_VIDEO_HSR);
-@@ -1752,7 +1837,7 @@ public class VideoModule implements CameraModule,
+@@ -1752,7 +1835,6 @@ public class VideoModule implements CameraModule,
              Log.e(TAG, "Invalid hfr(" + hfr + ") or hsr(" + hsr + ")");
          }
  
 -        mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.CAMERA);
-+        mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
  
          mProfile.videoCodec = mVideoEncoder;
          mProfile.audioCodec = mAudioEncoder;
-@@ -1853,13 +1938,19 @@ public class VideoModule implements CameraModule,
+@@ -1781,14 +1863,14 @@ public class VideoModule implements CameraModule,
+                 mMediaRecorder.setAudioEncoder(mProfile.audioCodec);
+             }
+         } else {
+-            if (!mCaptureTimeLapse) {
+-                mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.CAMCORDER);
+-            }
+-
+-            mMediaRecorder.setProfile(mProfile);
++            // pisces: MediaRecorder only records the audio track; the video is
++            // encoded from the camera preview frames by PreviewVideoRecorder so
++            // the viewfinder keeps running.
++            mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.CAMCORDER);
++            mMediaRecorder.setOutputFormat(mProfile.fileFormat);
++            mMediaRecorder.setAudioEncoder(mProfile.audioCodec);
+         }
+ 
+-        mMediaRecorder.setVideoSize(mProfile.videoFrameWidth, mProfile.videoFrameHeight);
+         mMediaRecorder.setMaxDuration(mMaxVideoDurationInMs);
+         if (mCaptureTimeLapse) {
+             double fps = 1000 / (double) mTimeBetweenTimeLapseFrameCaptureMs;
+@@ -1853,15 +1935,20 @@ public class VideoModule implements CameraModule,
          // what activity.getWindowManager().getDefaultDisplay().getRotation() would return,
          // which is the orientation the graphics need to rotate in order to render correctly.
          int rotation = 0;
@@ -144,11 +176,9 @@ index 190cc248a..43d44daa1 100644
 +        CameraHolder.CameraInfo info = CameraHolder.instance().getCameraInfo()[mCameraId];
 +        int deviceOrientation = mOrientation;
 +        if (deviceOrientation == OrientationEventListener.ORIENTATION_UNKNOWN) {
-+            // pisces: the orientation listener never delivers a value on this
-+            // device, so fall back to the display rotation - otherwise portrait
-+            // recordings were saved as landscape (rotation hint 0).
++            // pisces: the orientation listener never delivers here, so use the
++            // display rotation (otherwise portrait is saved as landscape).
 +            deviceOrientation = (mDisplayRotation * 90) % 360;
-+            Log.v(TAG, "using display rotation for the video orientation: " + deviceOrientation);
 +        }
 +        if (info.facing == CameraHolder.CameraInfo.CAMERA_FACING_FRONT) {
 +            rotation = (info.orientation - deviceOrientation - mOrientationOffset + 360) % 360;
@@ -156,20 +186,117 @@ index 190cc248a..43d44daa1 100644
 +            rotation = (info.orientation + deviceOrientation + mOrientationOffset) % 360;
          }
          mMediaRecorder.setOrientationHint(rotation);
++        mMediaRecorderRotationHint = rotation;
          setupMediaRecorderPreviewDisplay();
-@@ -1872,6 +1963,15 @@ public class VideoModule implements CameraModule,
-             throw new RuntimeException(e);
+ 
+         try {
+@@ -2116,6 +2203,8 @@ public class VideoModule implements CameraModule,
+             return false;
          }
  
-+        // pisces: hand the recorder surface to the camera so the encoder gets
-+        // the preview frames.
-+        try {
-+            Surface recorderSurface = mMediaRecorder.getSurface();
-+            setupCameraForRecorderSurface(recorderSurface);
-+        } catch (IllegalStateException e) {
-+            Log.e(TAG, "cannot get the recorder surface", e);
-+        }
++        startPreviewVideoRecorder();
 +
-         mMediaRecorder.setOnErrorListener(this);
-         mMediaRecorder.setOnInfoListener(this);
+         mUI.hideUIwhileRecording();
+ 
+         // Make sure the video recording has started before announcing
+@@ -2210,6 +2299,92 @@ public class VideoModule implements CameraModule,
+         }
      }
+ 
++    /** Starts encoding the camera preview frames into the video track. */
++    private void startPreviewVideoRecorder() {
++        if (mPreviewRecorder != null || mCameraDevice == null) {
++            return;
++        }
++        // The callback buffer must match the camera's actual preview size, not
++        // the size we asked the UI for.
++        Camera.Size previewSize = mParameters.getPreviewSize();
++        int width = previewSize != null ? previewSize.width : mProfile.videoFrameWidth;
++        int height = previewSize != null ? previewSize.height : mProfile.videoFrameHeight;
++        Log.i(TAG, "preview callback size " + width + "x" + height
++                + " (ui " + mDesiredPreviewWidth + "x" + mDesiredPreviewHeight + ")");
++        mVideoTempPath = mVideoFilename + ".video";
++        mPreviewRecorder = new PreviewVideoRecorder();
++        mPreviewRecorder.setAudioEnabled(false);
++        try {
++            mPreviewRecorder.start(width, height, mProfile.videoFrameRate,
++                    mProfile.videoBitRate, mVideoTempPath, 0);
++        } catch (Exception e) {
++            Log.e(TAG, "cannot start the preview recorder", e);
++            mPreviewRecorder = null;
++            mVideoTempPath = null;
++            return;
++        }
++        mRecorderThread = new HandlerThread("VideoRecorder");
++        mRecorderThread.start();
++        mRecorderHandler = new Handler(mRecorderThread.getLooper());
++        int size = width * height * 3 / 2;
++        mRecorderBuffer = new byte[size];
++        mCameraDevice.addCallbackBuffer(mRecorderBuffer);
++        mCameraDevice.setPreviewDataCallbackWithBuffer(mRecorderHandler,
++                new CameraManager.CameraPreviewDataCallback() {
++                    @Override
++                    public void onPreviewFrame(byte[] data, CameraManager.CameraProxy camera) {
++                        PreviewVideoRecorder recorder = mPreviewRecorder;
++                        if (recorder != null) {
++                            recorder.offerFrame(data);
++                        }
++                        if (mCameraDevice != null) {
++                            mCameraDevice.addCallbackBuffer(data);
++                        }
++                    }
++                });
++        Log.i(TAG, "preview video recorder started at " + width + "x" + height);
++    }
++
++    /** Stops the preview recorder and merges its video with the audio file. */
++    private void stopPreviewVideoRecorder() {
++        if (mCameraDevice != null) {
++            mCameraDevice.setPreviewDataCallbackWithBuffer(mRecorderHandler, null);
++        }
++        PreviewVideoRecorder recorder = mPreviewRecorder;
++        mPreviewRecorder = null;
++        if (recorder != null) {
++            recorder.stop();
++        }
++        if (mRecorderThread != null) {
++            mRecorderThread.quitSafely();
++            mRecorderThread = null;
++            mRecorderHandler = null;
++        }
++        mRecorderBuffer = null;
++        String videoPath = mVideoTempPath;
++        mVideoTempPath = null;
++        if (videoPath == null || mVideoFilename == null) {
++            return;
++        }
++        // Merge the preview-encoded video with the audio MediaRecorder wrote.
++        // The muxer must not write over its own audio input, so go through a
++        // temporary file and rename it into place afterwards.
++        String mergedPath = mVideoFilename + ".merged";
++        if (PreviewVideoRecorder.remux(videoPath, mVideoFilename, mergedPath,
++                mMediaRecorderRotationHint)) {
++            File merged = new File(mergedPath);
++            File target = new File(mVideoFilename);
++            if (merged.renameTo(target)) {
++                new File(videoPath).delete();
++                Log.i(TAG, "video track merged into " + mVideoFilename);
++            } else {
++                Log.e(TAG, "could not rename " + mergedPath);
++            }
++        } else {
++            Log.e(TAG, "could not merge the video track, keeping " + videoPath);
++        }
++    }
++
+     private boolean stopVideoRecording() {
+         Log.v(TAG, "stopVideoRecording");
+         mStopRecPending = true;
+@@ -2238,6 +2413,7 @@ public class VideoModule implements CameraModule,
+                 fail = true;
+             }
+             mMediaRecorderRecording = false;
++            stopPreviewVideoRecorder();
+ 
+             //If recording stops while snapshot is in progress, we might not get jpeg callback
+             //because cameraservice will disable picture related messages. Hence reset the

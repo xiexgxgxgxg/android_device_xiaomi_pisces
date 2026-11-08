@@ -96,4 +96,8 @@ apply 0048-snap-video-surface-source.patch             packages/apps/Snap
 # 0049: Snap's video recording also needs the GL preview mirror (it feeds the
 # viewfinder and the encoder at the same time).
 apply_file 0049-snap-preview-mirror packages/apps/Snap PreviewMirror.java src/com/android/camera/
+# 0050: Snap records video from the camera preview frames (PreviewVideoRecorder)
+# so the viewfinder keeps working; MediaRecorder only records audio and the two
+# are merged at stop.
+apply_file 0050-snap-preview-video-recorder packages/apps/Snap PreviewVideoRecorder.java src/com/android/camera/
 echo "all patches applied"
