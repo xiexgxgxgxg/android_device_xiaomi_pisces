@@ -728,3 +728,18 @@ Nvidia 的 h264 **解码器**（`OMX.Nvidia.h264.decode`）在 NuPlayer 下报
 改成启动 `/system/bin/media_omx_service`；`device_pisces.mk` 负责把
 `prebuilt/media_omx_service` 和 `prebuilt/libstagefrighthw.so` 装到 `/system/bin`
 和 `/system/lib`。
+
+### 16.8 录像可用 + 预览镜像（2026-11-08 20:20，kernel #234）
+
+- **录像**：Snap 改成 `VideoSource.SURFACE`，把 `MediaRecorder.getSurface()` 交给相机
+  （patch 0048）。生成的 MP4：`ftyp/moov/mdat` 齐全、`avc1`+`avcC`+`mp4a`，
+  实测 6 秒 7.8 MB、视频轨 119 个 sample；编码走 `OMX.Nvidia.h264.encoder`。
+- **预览**：相机只有一个输出，录像时画面被编码器占用会让屏幕卡在第一帧。
+  新增 `PreviewMirror`（GL）：相机 → `SurfaceTexture` → 同时画到屏幕和编码器
+  （patch 0049 + `PreviewMirror.java`）。实测录像中取景画面实时更新（截图确认）。
+- **播放**：`OMX.Nvidia.h264.decode` 在 NuPlayer 下报 0x80001000，已在
+  `media/media_codecs.xml` 注掉，改用软件解码器，相册能播。
+- **权限**：`mediaserver` 加了 `umask(0022)`；`sdcard` 守护进程 fork 了一个 root 子进程
+  每 30 秒重新放松存储树权限（新录的视频/照片立刻可被相册读取）。
+- 已知小问题：自动化点击“停止录像”偶尔不生效（`Input event injection failed`），
+  停止失败时 Snap 会把文件当空文件删掉；手动操作有待确认。
