@@ -1,5 +1,5 @@
 diff --git a/src/com/android/camera/VideoModule.java b/src/com/android/camera/VideoModule.java
-index 190cc248a..3e873f74c 100644
+index 190cc248a..912222d06 100644
 --- a/src/com/android/camera/VideoModule.java
 +++ b/src/com/android/camera/VideoModule.java
 @@ -17,6 +17,8 @@
@@ -19,11 +19,13 @@ index 190cc248a..3e873f74c 100644
  import android.view.SurfaceHolder;
  import android.view.View;
  import android.view.WindowManager;
-@@ -1631,6 +1634,85 @@ public class VideoModule implements CameraModule,
+@@ -1631,6 +1634,118 @@ public class VideoModule implements CameraModule,
          }
      }
  
 +    /** Minimal SurfaceHolder that just carries a Surface to Camera.setPreviewDisplay(). */
++    private PreviewMirror mPreviewMirror;
++
 +    private static class RecorderSurfaceHolder implements SurfaceHolder {
 +        private final Surface mSurface;
 +
@@ -95,17 +97,48 @@ index 190cc248a..3e873f74c 100644
 +     */
 +    private void setupCameraForRecorderSurface(Surface surface) {
 +        stopPreview();
-+        mCameraDevice.setPreviewDisplay(new RecorderSurfaceHolder(surface));
++        // Mirror the camera preview into both the screen and the encoder surface:
++        // the camera itself can only feed one of them.
++        if (mPreviewMirror == null) {
++            mPreviewMirror = new PreviewMirror();
++            mPreviewMirror.setDefaultBufferSize(mProfile.videoFrameWidth,
++                    mProfile.videoFrameHeight);
++        }
++        mCameraDevice.setPreviewTexture(mPreviewMirror.getSurfaceTexture());
 +        mCameraDevice.setDisplayOrientation(
 +                CameraUtil.getDisplayOrientation(mDisplayRotation, mCameraId));
 +        mCameraDevice.startPreview();
 +        mPreviewing = true;
++        // Connect EGL only after the camera has taken the texture, otherwise the
++        // SurfaceView is still owned by the camera and eglCreateWindowSurface
++        // fails with "already connected to another API".
++        if (mPreviewMirror.start(mUI.getSurfaceHolder().getSurface())) {
++            mPreviewMirror.setRecorderSurface(surface);
++        } else {
++            Log.w(TAG, "preview mirror unavailable, recording without a viewfinder");
++            mPreviewMirror.stop();
++            mPreviewMirror = null;
++        }
++    }
++
++    /** Stops the preview mirror and points the camera back at the screen. */
++    private void stopPreviewMirror() {
++        if (mPreviewMirror == null) {
++            return;
++        }
++        mPreviewMirror.setRecorderSurface(null);
++        mPreviewMirror.stop();
++        mPreviewMirror = null;
++        if (mCameraDevice != null) {
++            stopPreview();
++            startPreview();
++        }
 +    }
 +
      private void setupMediaRecorderPreviewDisplay() {
          mFocusManager.resetTouchFocus();
          // Nothing to do here if using SurfaceTexture.
-@@ -1733,9 +1815,12 @@ public class VideoModule implements CameraModule,
+@@ -1733,9 +1848,12 @@ public class VideoModule implements CameraModule,
          }
          mMediaRecorder = new MediaRecorder();
  
@@ -121,7 +154,7 @@ index 190cc248a..3e873f74c 100644
  
          String hfr = ParametersWrapper.getVideoHighFrameRate(mParameters);
          String hsr =  mParameters.get(CameraSettings.KEY_VIDEO_HSR);
-@@ -1752,7 +1837,7 @@ public class VideoModule implements CameraModule,
+@@ -1752,7 +1870,7 @@ public class VideoModule implements CameraModule,
              Log.e(TAG, "Invalid hfr(" + hfr + ") or hsr(" + hsr + ")");
          }
  
@@ -130,7 +163,7 @@ index 190cc248a..3e873f74c 100644
  
          mProfile.videoCodec = mVideoEncoder;
          mProfile.audioCodec = mAudioEncoder;
-@@ -1872,6 +1957,17 @@ public class VideoModule implements CameraModule,
+@@ -1872,6 +1990,17 @@ public class VideoModule implements CameraModule,
              throw new RuntimeException(e);
          }
  
@@ -148,3 +181,13 @@ index 190cc248a..3e873f74c 100644
          mMediaRecorder.setOnErrorListener(this);
          mMediaRecorder.setOnInfoListener(this);
      }
+@@ -2272,6 +2401,9 @@ public class VideoModule implements CameraModule,
+         // release media recorder
+         releaseMediaRecorder();
+         releaseAudioFocus();
++        if (!mPaused) {
++            stopPreviewMirror();
++        }
+         if (!mPaused) {
+             mCameraDevice.lock();
+             if (!ApiHelper.HAS_SURFACE_TEXTURE_RECORDING) {

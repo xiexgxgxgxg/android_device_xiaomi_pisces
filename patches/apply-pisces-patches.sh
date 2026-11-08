@@ -93,4 +93,7 @@ apply 0047-frameworks-av-camera-info-wait.patch         frameworks/av
 # working CameraClient::setPreviewCallbackTarget(), so CAMERA-source recordings
 # end up with an empty video track.
 apply 0048-snap-video-surface-source.patch             packages/apps/Snap
+# 0049: Snap's video recording also needs the GL preview mirror (it feeds the
+# viewfinder and the encoder at the same time).
+apply_file 0049-snap-preview-mirror packages/apps/Snap PreviewMirror.java src/com/android/camera/
 echo "all patches applied"
