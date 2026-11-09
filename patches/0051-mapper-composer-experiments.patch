@@ -1,0 +1,77 @@
+diff --git a/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h b/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
+index 7369ac75..f465d9d6 100644
+--- a/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
++++ b/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
+@@ -23,6 +23,7 @@
+ 
+ #include <hardware/gralloc.h>
+ #include <log/log.h>
++#include <cutils/properties.h>
+ #include <mapper-hal/2.0/MapperHal.h>
+ #include <mapper-passthrough/2.0/GrallocBufferDescriptor.h>
+ #include <sync/sync.h>
+@@ -38,6 +39,25 @@ namespace detail {
+ 
+ using common::V1_0::BufferUsage;
+ 
++// pisces: hand the buffer handles straight through to the HAL instead of cloning
++// and registering them.  The NVIDIA composer crashed inside NvGrUnregisterBuffer
++// (destroyLayer) and NvGrAddFence (presentDisplay) when it was given our clones.
++// Toggle with persist.pisces.mapper_passthrough for A/B testing.
++// pisces: force a full (re)registration of cloned buffer handles, see below.
++static inline bool piscesGrallocPidFix() {
++    char value[PROPERTY_VALUE_MAX] = {0};
++    property_get("persist.pisces.gralloc_pidfix", value, "0");
++    return value[0] == '1';
++}
++
++static inline bool piscesMapperPassthrough() {
++    char value[PROPERTY_VALUE_MAX] = {0};
++    property_get("persist.pisces.mapper_passthrough", value, "0");
++    return value[0] == '1';
++}
++
++
++
+ // Gralloc0HalImpl implements V2_*::hal::MapperHal on top of gralloc0
+ template <typename Hal>
+ class Gralloc0HalImpl : public Hal {
+@@ -75,11 +95,28 @@ class Gralloc0HalImpl : public Hal {
+ 
+     Error importBuffer(const native_handle_t* rawHandle,
+                        native_handle_t** outBufferHandle) override {
++        if (piscesMapperPassthrough()) {
++            *outBufferHandle = const_cast<native_handle_t*>(rawHandle);
++            return Error::NONE;
++        }
+         native_handle_t* bufferHandle = native_handle_clone(rawHandle);
+         if (!bufferHandle) {
+             return Error::NO_RESOURCES;
+         }
+ 
++        if (piscesGrallocPidFix()) {
++            // NVIDIA's gralloc keeps the owning pid in the first int of the
++            // handle and NvGrRegisterBuffer() only bumps a refcount when that
++            // pid matches the caller.  A clone inherits the source process's
++            // pid, so the shortcut can fire and leave the private pointers
++            // inside the handle pointing at the other process's memory - which
++            // is what crashed the composer in NvGrAddFence/NvGrUnregisterBuffer.
++            // Clearing it forces the full registration path.
++            if (bufferHandle->numInts > 0) {
++                bufferHandle->data[bufferHandle->numFds] = 0;
++            }
++        }
++
+         if (mModule->registerBuffer(mModule, bufferHandle)) {
+             native_handle_close(bufferHandle);
+             native_handle_delete(bufferHandle);
+@@ -92,6 +129,9 @@ class Gralloc0HalImpl : public Hal {
+     }
+ 
+     Error freeBuffer(native_handle_t* bufferHandle) override {
++        if (piscesMapperPassthrough()) {
++            return Error::NONE;
++        }
+         if (mModule->unregisterBuffer(mModule, bufferHandle)) {
+             return Error::BAD_BUFFER;
+         }
