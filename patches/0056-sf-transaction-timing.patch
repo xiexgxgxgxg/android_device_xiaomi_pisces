@@ -1,5 +1,5 @@
 diff --git a/services/surfaceflinger/SurfaceFlinger.cpp b/services/surfaceflinger/SurfaceFlinger.cpp
-index f513b9fd7..c964cf62a 100644
+index f513b9fd7..e2fdc66a5 100644
 --- a/services/surfaceflinger/SurfaceFlinger.cpp
 +++ b/services/surfaceflinger/SurfaceFlinger.cpp
 @@ -2286,6 +2286,10 @@ void SurfaceFlinger::handleTransaction(uint32_t transactionFlags)
@@ -38,3 +38,31 @@ index f513b9fd7..c964cf62a 100644
              if (CC_UNLIKELY(err != NO_ERROR)) {
                  // just in case something goes wrong in SF, return to the
                  // called after a few seconds.
+@@ -3696,7 +3707,9 @@ status_t SurfaceFlinger::createLayer(const String8& name, const sp<Client>& clie
+ 
+     sp<Layer> layer;
+ 
++    const nsecs_t piscesT0 = systemTime();
+     String8 uniqueName = getUniqueLayerName(name);
++    const nsecs_t piscesT1 = systemTime();
+ 
+     switch (flags & ISurfaceComposerClient::eFXSurfaceMask) {
+         case ISurfaceComposerClient::eFXSurfaceNormal:
+@@ -3731,9 +3744,17 @@ status_t SurfaceFlinger::createLayer(const String8& name, const sp<Client>& clie
+         layer->setPrimaryDisplayOnly();
+     }
+ 
++    const nsecs_t piscesT2 = systemTime();
+     layer->setInfo(windowType, ownerUid);
+ 
+     result = addClientLayer(client, *handle, *gbp, layer, parentHandle, parentLayer);
++    const nsecs_t piscesT3 = systemTime();
++    if (piscesT3 - piscesT0 > ms2ns(5)) {
++        ALOGW("pisces: createLayer %s took %" PRId64 " ms (name %" PRId64
++                ", buffer %" PRId64 ", add %" PRId64 ")", name.string(),
++                ns2ms(piscesT3 - piscesT0), ns2ms(piscesT1 - piscesT0),
++                ns2ms(piscesT2 - piscesT1), ns2ms(piscesT3 - piscesT2));
++    }
+     if (result != NO_ERROR) {
+         return result;
+     }
