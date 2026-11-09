@@ -60,10 +60,12 @@ public class PreviewVideoRecorder {
     private boolean mStopping;
     private volatile boolean mReleased;
     private boolean mAudioEnabled = true;
+    private boolean mVideoEnabled = true;
 
     private int mWidth;
     private int mHeight;
     private byte[] mConvert;
+    private int mColorFormat;
     private byte[] mAudioBuffer;
     private int mVideoFrames;
     private long mStartTimeUs;
@@ -74,6 +76,10 @@ public class PreviewVideoRecorder {
         public RecorderException(String message) {
             super(message);
         }
+    }
+
+    public void setVideoEnabled(boolean enabled) {
+        mVideoEnabled = enabled;
     }
 
     public void setAudioEnabled(boolean enabled) {
@@ -101,6 +107,7 @@ public class PreviewVideoRecorder {
             Log.i(TAG, "video encoder: " + encoderName);
             int colorFormat = chooseColorFormat(encoderName, VIDEO_MIME);
             Log.i(TAG, "video color format: " + colorFormat);
+            if (mVideoEnabled) {
             MediaFormat videoFormat = MediaFormat.createVideoFormat(VIDEO_MIME, width, height);
             videoFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT, colorFormat);
             videoFormat.setInteger(MediaFormat.KEY_BIT_RATE, videoBitRate);
@@ -111,6 +118,7 @@ public class PreviewVideoRecorder {
                     : MediaCodec.createEncoderByType(VIDEO_MIME);
             mVideoEncoder.configure(videoFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
             mVideoEncoder.start();
+            }
 
             MediaFormat audioFormat = MediaFormat.createAudioFormat(AUDIO_MIME,
                     AUDIO_SAMPLE_RATE, 1);
@@ -122,6 +130,7 @@ public class PreviewVideoRecorder {
             mAudioEncoder.configure(audioFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
             mAudioEncoder.start();
 
+            mColorFormat = colorFormat;
             mConvert = new byte[width * height * 3 / 2];
         } catch (Exception e) {
             Log.e(TAG, "cannot start the encoders", e);
@@ -274,7 +283,7 @@ public class PreviewVideoRecorder {
 
     /** Feeds one camera preview frame (NV21) to the encoder. */
     public void offerFrame(byte[] nv21) {
-        if (mReleased || mStopping || mVideoEncoder == null) {
+        if (mReleased || mStopping || mVideoEncoder == null || !mVideoEnabled) {
             return;
         }
         if (nv21.length < mConvert.length) {
@@ -283,10 +292,33 @@ public class PreviewVideoRecorder {
         }
         // The camera delivers NV21 (YYYY...VUVU); the encoder wants NV12
         // (YYYY...UVUV), so swap the chroma bytes into our own buffer.
-        System.arraycopy(nv21, 0, mConvert, 0, mWidth * mHeight);
-        for (int i = mWidth * mHeight; i + 1 < mConvert.length; i += 2) {
-            mConvert[i] = nv21[i + 1];
-            mConvert[i + 1] = nv21[i];
+        // The camera hands us NV21 (YYYY...VUVU).  Convert it to whatever the
+        // encoder was configured with: I420 (planar) or NV12 (semi planar).
+        // persist.pisces.cam_uvswap flips the chroma order in case the HAL
+        // actually delivers NV12 instead of NV21.
+        final int ySize = mWidth * mHeight;
+        final boolean uvSwap = android.os.SystemProperties.getBoolean(
+                "persist.pisces.cam_uvswap", false);
+        System.arraycopy(nv21, 0, mConvert, 0, ySize);
+        if (mColorFormat == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar) {
+            int uIndex = ySize;
+            int vIndex = ySize + ySize / 4;
+            for (int i = 0; i < ySize / 4; i++) {
+                byte first = nv21[ySize + i * 2];
+                byte second = nv21[ySize + i * 2 + 1];
+                mConvert[uIndex + i] = uvSwap ? first : second;
+                mConvert[vIndex + i] = uvSwap ? second : first;
+            }
+        } else {
+            for (int i = ySize; i + 1 < mConvert.length; i += 2) {
+                if (uvSwap) {
+                    mConvert[i] = nv21[i];
+                    mConvert[i + 1] = nv21[i + 1];
+                } else {
+                    mConvert[i] = nv21[i + 1];
+                    mConvert[i + 1] = nv21[i];
+                }
+            }
         }
         try {
             int index = mVideoEncoder.dequeueInputBuffer(DEQUEUE_TIMEOUT_US);
@@ -386,7 +418,8 @@ public class PreviewVideoRecorder {
     }
 
     private void maybeStartMuxer() {
-        if (!mMuxerStarted && mVideoTrack >= 0 && (!mAudioEnabled || mAudioTrack >= 0)) {
+        if (!mMuxerStarted && (!mVideoEnabled || mVideoTrack >= 0)
+                && (!mAudioEnabled || mAudioTrack >= 0)) {
             mMuxer.start();
             mMuxerStarted = true;
             Log.i(TAG, "muxer started (video=" + mVideoTrack + ", audio=" + mAudioTrack + ")");
@@ -502,9 +535,11 @@ public class PreviewVideoRecorder {
             muxer.start();
             MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
             ByteBuffer buffer = ByteBuffer.allocateDirect(1024 * 1024);
-            copyTrack(video, muxer, outVideo, buffer, info);
+            long videoEndUs = copyTrack(video, muxer, outVideo, buffer, info, Long.MAX_VALUE);
             if (outAudio >= 0) {
-                copyTrack(audio, muxer, outAudio, buffer, info);
+                // The audio recorder keeps running while the video encoder is
+                // drained, so cut the audio at the last video frame.
+                copyTrack(audio, muxer, outAudio, buffer, info, videoEndUs);
             }
             muxer.stop();
             Log.i(TAG, "remuxed into " + outPath);
@@ -526,9 +561,19 @@ public class PreviewVideoRecorder {
 
     private static void copyTrack(android.media.MediaExtractor extractor, MediaMuxer muxer,
             int track, ByteBuffer buffer, MediaCodec.BufferInfo info) {
+        copyTrack(extractor, muxer, track, buffer, info, Long.MAX_VALUE);
+    }
+
+    /** Copies samples, stops at limitUs and returns the last timestamp seen. */
+    private static long copyTrack(android.media.MediaExtractor extractor, MediaMuxer muxer,
+            int track, ByteBuffer buffer, MediaCodec.BufferInfo info, long limitUs) {
+        long last = 0;
         while (true) {
             int size = extractor.readSampleData(buffer, 0);
             if (size < 0) {
+                break;
+            }
+            if (extractor.getSampleTime() > limitUs) {
                 break;
             }
             info.offset = 0;
@@ -536,8 +581,10 @@ public class PreviewVideoRecorder {
             info.presentationTimeUs = extractor.getSampleTime();
             info.flags = extractor.getSampleFlags();
             muxer.writeSampleData(track, buffer, info);
+            last = info.presentationTimeUs;
             extractor.advance();
         }
+        return last;
     }
 
     private void release() {

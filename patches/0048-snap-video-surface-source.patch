@@ -1,5 +1,5 @@
 diff --git a/src/com/android/camera/VideoModule.java b/src/com/android/camera/VideoModule.java
-index 190cc248a..4c11b885f 100644
+index 190cc248a..9738f09dd 100644
 --- a/src/com/android/camera/VideoModule.java
 +++ b/src/com/android/camera/VideoModule.java
 @@ -17,6 +17,8 @@
@@ -27,11 +27,14 @@ index 190cc248a..4c11b885f 100644
  import android.view.SurfaceHolder;
  import android.view.View;
  import android.view.WindowManager;
-@@ -97,6 +101,13 @@ public class VideoModule implements CameraModule,
+@@ -97,6 +101,16 @@ public class VideoModule implements CameraModule,
      MediaRecorder.OnErrorListener,
      MediaRecorder.OnInfoListener {
  
 +    private PreviewVideoRecorder mPreviewRecorder;
++    private PreviewVideoRecorder mAudioRecorder;
++    private String mAudioTempPath;
++    private String mAudioMergePath;
 +    private HandlerThread mRecorderThread;
 +    private Handler mRecorderHandler;
 +    private byte[] mRecorderBuffer;
@@ -41,7 +44,31 @@ index 190cc248a..4c11b885f 100644
      private static final String TAG = "CAM_VideoModule";
  
      private static final int CHECK_DISPLAY_ROTATION = 3;
-@@ -1631,6 +1642,80 @@ public class VideoModule implements CameraModule,
+@@ -1185,6 +1199,23 @@ public class VideoModule implements CameraModule,
+             mDesiredPreviewWidth = optimalSize.width;
+             mDesiredPreviewHeight = optimalSize.height;
+         }
++        // pisces: the video track is encoded from the preview frames on the CPU,
++        // so keep the preview (and the recording) small enough to stay smooth.
++        if (mDesiredPreviewWidth * mDesiredPreviewHeight > 640 * 480) {
++            Size best = null;
++            for (Size size : mParameters.getSupportedPreviewSizes()) {
++                if (size.width * size.height <= 640 * 480
++                        && (best == null || size.width * size.height
++                                > best.width * best.height)) {
++                    best = size;
++                }
++            }
++            if (best != null) {
++                mDesiredPreviewWidth = best.width;
++                mDesiredPreviewHeight = best.height;
++                Log.i(TAG, "video preview capped to " + best.width + "x" + best.height);
++            }
++        }
+         mUI.setPreviewSize(mDesiredPreviewWidth, mDesiredPreviewHeight);
+         Log.v(TAG, "mDesiredPreviewWidth=" + mDesiredPreviewWidth +
+                 ". mDesiredPreviewHeight=" + mDesiredPreviewHeight);
+@@ -1631,6 +1662,80 @@ public class VideoModule implements CameraModule,
          }
      }
  
@@ -122,7 +149,7 @@ index 190cc248a..4c11b885f 100644
      private void setupMediaRecorderPreviewDisplay() {
          mFocusManager.resetTouchFocus();
          // Nothing to do here if using SurfaceTexture.
-@@ -1733,9 +1818,8 @@ public class VideoModule implements CameraModule,
+@@ -1733,9 +1838,8 @@ public class VideoModule implements CameraModule,
          }
          mMediaRecorder = new MediaRecorder();
  
@@ -134,7 +161,7 @@ index 190cc248a..4c11b885f 100644
  
          String hfr = ParametersWrapper.getVideoHighFrameRate(mParameters);
          String hsr =  mParameters.get(CameraSettings.KEY_VIDEO_HSR);
-@@ -1752,7 +1836,6 @@ public class VideoModule implements CameraModule,
+@@ -1752,7 +1856,6 @@ public class VideoModule implements CameraModule,
              Log.e(TAG, "Invalid hfr(" + hfr + ") or hsr(" + hsr + ")");
          }
  
@@ -142,7 +169,7 @@ index 190cc248a..4c11b885f 100644
  
          mProfile.videoCodec = mVideoEncoder;
          mProfile.audioCodec = mAudioEncoder;
-@@ -1781,14 +1864,14 @@ public class VideoModule implements CameraModule,
+@@ -1781,14 +1884,17 @@ public class VideoModule implements CameraModule,
                  mMediaRecorder.setAudioEncoder(mProfile.audioCodec);
              }
          } else {
@@ -156,6 +183,9 @@ index 190cc248a..4c11b885f 100644
 +            // the viewfinder keeps running, and the two are merged on stop.
 +            mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.CAMCORDER);
 +            mMediaRecorder.setOutputFormat(mProfile.fileFormat);
++            mMediaRecorder.setAudioSamplingRate(8000);
++            mMediaRecorder.setAudioEncodingBitRate(96000);
++            mMediaRecorder.setAudioChannels(1);
 +            mMediaRecorder.setAudioEncoder(mProfile.audioCodec);
          }
  
@@ -163,7 +193,7 @@ index 190cc248a..4c11b885f 100644
          mMediaRecorder.setMaxDuration(mMaxVideoDurationInMs);
          if (mCaptureTimeLapse) {
              double fps = 1000 / (double) mTimeBetweenTimeLapseFrameCaptureMs;
-@@ -1853,15 +1936,18 @@ public class VideoModule implements CameraModule,
+@@ -1853,15 +1959,18 @@ public class VideoModule implements CameraModule,
          // what activity.getWindowManager().getDefaultDisplay().getRotation() would return,
          // which is the orientation the graphics need to rotate in order to render correctly.
          int rotation = 0;
@@ -189,7 +219,7 @@ index 190cc248a..4c11b885f 100644
          setupMediaRecorderPreviewDisplay();
  
          try {
-@@ -2116,6 +2202,8 @@ public class VideoModule implements CameraModule,
+@@ -2116,6 +2225,8 @@ public class VideoModule implements CameraModule,
              return false;
          }
  
@@ -198,7 +228,7 @@ index 190cc248a..4c11b885f 100644
          mUI.hideUIwhileRecording();
  
          // Make sure the video recording has started before announcing
-@@ -2210,6 +2298,86 @@ public class VideoModule implements CameraModule,
+@@ -2210,6 +2321,86 @@ public class VideoModule implements CameraModule,
          }
      }
  
@@ -285,7 +315,7 @@ index 190cc248a..4c11b885f 100644
      private boolean stopVideoRecording() {
          Log.v(TAG, "stopVideoRecording");
          mStopRecPending = true;
-@@ -2238,6 +2406,36 @@ public class VideoModule implements CameraModule,
+@@ -2238,6 +2429,36 @@ public class VideoModule implements CameraModule,
                  fail = true;
              }
              mMediaRecorderRecording = false;
@@ -322,7 +352,7 @@ index 190cc248a..4c11b885f 100644
  
              //If recording stops while snapshot is in progress, we might not get jpeg callback
              //because cameraservice will disable picture related messages. Hence reset the
-@@ -2261,9 +2459,7 @@ public class VideoModule implements CameraModule,
+@@ -2261,9 +2482,7 @@ public class VideoModule implements CameraModule,
              mUI.setOrientationIndicator(0, true);
              keepScreenOnAwhile();
              if (shouldAddToMediaStoreNow && !fail) {
