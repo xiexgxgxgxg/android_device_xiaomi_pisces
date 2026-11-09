@@ -23,6 +23,7 @@ import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.media.MediaMuxer;
 import android.media.MediaRecorder;
+import android.os.SystemClock;
 import android.util.Log;
 
 import java.io.File;
@@ -216,15 +217,18 @@ public class PreviewVideoRecorder {
     }
 
     private void audioLoop() {
-        while (!mStopping) {
-            int read = mAudioRecord.read(mAudioBuffer, 0, mAudioBuffer.length);
-            if (read <= 0) {
-                continue;
+        try {
+            while (!mStopping) {
+                int read = mAudioRecord.read(mAudioBuffer, 0, mAudioBuffer.length);
+                if (read <= 0) {
+                    continue;
+                }
+                feedAudio(mAudioBuffer, read);
+                drainAudioEncoder(false);
             }
-            feedAudio(mAudioBuffer, read);
-            drainAudioEncoder(false);
+        } catch (Exception e) {
+            Log.e(TAG, "audio capture failed", e);
         }
-        drainAudioEncoder(true);
     }
 
     private void feedAudio(byte[] data, int size) {
@@ -243,7 +247,7 @@ public class PreviewVideoRecorder {
             buffer.clear();
             buffer.put(data, 0, Math.min(size, buffer.capacity()));
             mAudioEncoder.queueInputBuffer(index, 0, Math.min(size, buffer.capacity()),
-                    System.nanoTime() / 1000, 0);
+                    System.nanoTime() / 1000 - mStartTimeUs, 0);
         } catch (IllegalStateException e) {
             Log.w(TAG, "audio encoder gone", e);
         }
@@ -257,7 +261,8 @@ public class PreviewVideoRecorder {
             try {
                 int index = mAudioEncoder.dequeueInputBuffer(DEQUEUE_TIMEOUT_US);
                 if (index >= 0) {
-                    mAudioEncoder.queueInputBuffer(index, 0, 0, System.nanoTime() / 1000,
+                    mAudioEncoder.queueInputBuffer(index, 0, 0,
+                            System.nanoTime() / 1000 - mStartTimeUs,
                             MediaCodec.BUFFER_FLAG_END_OF_STREAM);
                 }
             } catch (IllegalStateException e) {
@@ -306,17 +311,18 @@ public class PreviewVideoRecorder {
         }
     }
 
-    private void drainEncoder(MediaCodec encoder, boolean isAudio) {
+    private boolean drainEncoder(MediaCodec encoder, boolean isAudio) {
         MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
         while (true) {
             int index;
             try {
                 index = encoder.dequeueOutputBuffer(info, DEQUEUE_TIMEOUT_US);
-            } catch (IllegalStateException e) {
-                return;
+            } catch (Exception e) {
+                Log.w(TAG, "dequeueOutputBuffer failed", e);
+                return true;
             }
             if (index == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                return;
+                return false;
             }
             if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                 synchronized (mLock) {
@@ -332,25 +338,51 @@ public class PreviewVideoRecorder {
             if (index < 0) {
                 continue;
             }
-            ByteBuffer buffer = encoder.getOutputBuffer(index);
-            if ((info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
-                info.size = 0;
-            }
-            if (info.size > 0 && buffer != null) {
-                synchronized (mLock) {
-                    if (mMuxerStarted) {
-                        buffer.position(info.offset);
-                        buffer.limit(info.offset + info.size);
-                        mMuxer.writeSampleData(isAudio ? mAudioTrack : mVideoTrack,
-                                buffer, info);
+            try {
+                ByteBuffer buffer = encoder.getOutputBuffer(index);
+                if ((info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                    info.size = 0;
+                }
+                if (info.size > 0 && buffer != null) {
+                    synchronized (mLock) {
+                        if (mMuxerStarted) {
+                            buffer.position(info.offset);
+                            buffer.limit(info.offset + info.size);
+                            mMuxer.writeSampleData(isAudio ? mAudioTrack : mVideoTrack,
+                                    buffer, info);
+                        }
                     }
                 }
+                encoder.releaseOutputBuffer(index, false);
+            } catch (Exception e) {
+                Log.w(TAG, "dropping an encoder buffer", e);
+                try {
+                    encoder.releaseOutputBuffer(index, false);
+                } catch (Exception ignored) {
+                }
+                return false;
             }
-            encoder.releaseOutputBuffer(index, false);
             if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                return true;
+            }
+        }
+    }
+
+    /** Drains an encoder until it reports end of stream (bounded). */
+    private void drainUntilEos(MediaCodec encoder, boolean isAudio) {
+        long deadline = SystemClock.elapsedRealtime() + 5000;
+        while (SystemClock.elapsedRealtime() < deadline) {
+            if (drainEncoder(encoder, isAudio)) {
+                return;
+            }
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
                 return;
             }
         }
+        Log.w(TAG, "encoder did not reach end of stream in 5 s");
     }
 
     private void maybeStartMuxer() {
@@ -367,34 +399,62 @@ public class PreviewVideoRecorder {
             return;
         }
         mStopping = true;
-        if (mAudioThread != null) {
-            try {
-                mAudioThread.join(1000);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
+
+        // 1. stop the microphone and let the audio thread finish its last drain
+        //    before anything touches the muxer again.
         if (mAudioRecord != null) {
             try {
                 mAudioRecord.stop();
             } catch (IllegalStateException ignored) {
             }
-            mAudioRecord.release();
+        }
+        if (mAudioThread != null) {
+            try {
+                mAudioThread.join(5000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            mAudioThread = null;
+        }
+        if (mAudioRecord != null) {
+            try {
+                mAudioRecord.release();
+            } catch (Exception ignored) {
+            }
             mAudioRecord = null;
+        }
+
+        // 2. drain both encoders to their end of stream, one at a time.
+        if (mAudioEncoder != null) {
+            try {
+                int index = mAudioEncoder.dequeueInputBuffer(DEQUEUE_TIMEOUT_US);
+                if (index >= 0) {
+                    mAudioEncoder.queueInputBuffer(index, 0, 0,
+                            System.nanoTime() / 1000 - mStartTimeUs,
+                            MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                }
+                drainUntilEos(mAudioEncoder, true);
+            } catch (Exception e) {
+                Log.w(TAG, "audio end of stream failed", e);
+            }
         }
         if (mVideoEncoder != null) {
             try {
                 int index = mVideoEncoder.dequeueInputBuffer(DEQUEUE_TIMEOUT_US);
                 if (index >= 0) {
-                    mVideoEncoder.queueInputBuffer(index, 0, 0, System.nanoTime() / 1000,
+                    mVideoEncoder.queueInputBuffer(index, 0, 0,
+                            System.nanoTime() / 1000 - mStartTimeUs,
                             MediaCodec.BUFFER_FLAG_END_OF_STREAM);
                 }
-            } catch (IllegalStateException ignored) {
+                drainUntilEos(mVideoEncoder, false);
+            } catch (Exception e) {
+                Log.w(TAG, "video end of stream failed", e);
             }
-            drainEncoder(mVideoEncoder, false);
         }
+
         Log.i(TAG, "stopped after " + mVideoFrames + " video frames ("
                 + mDroppedFrames + " dropped)");
+        // 3. only now is it safe to finalise the file (this writes the moov).
         release();
     }
 
