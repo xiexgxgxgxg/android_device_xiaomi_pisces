@@ -1,5 +1,5 @@
 diff --git a/services/surfaceflinger/SurfaceFlinger.cpp b/services/surfaceflinger/SurfaceFlinger.cpp
-index f513b9fd7..a198036f9 100644
+index f513b9fd7..c964cf62a 100644
 --- a/services/surfaceflinger/SurfaceFlinger.cpp
 +++ b/services/surfaceflinger/SurfaceFlinger.cpp
 @@ -2286,6 +2286,10 @@ void SurfaceFlinger::handleTransaction(uint32_t transactionFlags)
@@ -13,3 +13,28 @@ index f513b9fd7..a198036f9 100644
      mDebugInTransaction = 0;
      invalidateHwcGeometry();
      // here the transaction has been committed
+@@ -3354,7 +3358,12 @@ void SurfaceFlinger::setTransactionState(
+         // For window updates that are part of an animation we must wait for
+         // previous animation "frames" to be handled.
+         while (mAnimTransactionPending) {
+-            status_t err = mTransactionCV.waitRelative(mStateLock, s2ns(5));
++            // pisces: this used to wait five seconds for the previous animation
++            // frame while the caller held the SurfaceComposerClient lock, which
++            // blocked createSurface() from the same process and froze the window
++            // manager long enough for the system to report an ANR.  A short
++            // timeout keeps the frame pacing but never stalls the caller.
++            status_t err = mTransactionCV.waitRelative(mStateLock, ms2ns(500));
+             if (CC_UNLIKELY(err != NO_ERROR)) {
+                 // just in case something goes wrong in SF, return to the
+                 // caller after a few seconds.
+@@ -3411,7 +3420,9 @@ void SurfaceFlinger::setTransactionState(
+             mAnimTransactionPending = true;
+         }
+         while (mTransactionPending) {
+-            status_t err = mTransactionCV.waitRelative(mStateLock, s2ns(5));
++            // pisces: see above - a synchronous transaction must not hold its
++            // caller for five seconds either.
++            status_t err = mTransactionCV.waitRelative(mStateLock, ms2ns(500));
+             if (CC_UNLIKELY(err != NO_ERROR)) {
+                 // just in case something goes wrong in SF, return to the
+                 // called after a few seconds.
