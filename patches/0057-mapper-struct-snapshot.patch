@@ -1,5 +1,5 @@
 diff --git a/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h b/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
-index 7369ac75..1006adc9 100644
+index 7369ac75..27144d41 100644
 --- a/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
 +++ b/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
 @@ -23,6 +23,18 @@
@@ -21,7 +21,7 @@ index 7369ac75..1006adc9 100644
  #include <mapper-hal/2.0/MapperHal.h>
  #include <mapper-passthrough/2.0/GrallocBufferDescriptor.h>
  #include <sync/sync.h>
-@@ -38,6 +50,316 @@ namespace detail {
+@@ -38,6 +50,315 @@ namespace detail {
  
  using common::V1_0::BufferUsage;
  
@@ -148,7 +148,7 @@ index 7369ac75..1006adc9 100644
 +static std::mutex gPiscesCacheMutex;
 +static std::unordered_map<unsigned long long, PiscesCachedHandle> gPiscesHandleCache;
 +static std::vector<unsigned long long> gPiscesCacheOrder;
-+static constexpr size_t kPiscesCacheLimit = 96;
++static constexpr size_t kPiscesCacheLimit = 8;
 +
 +static inline bool piscesHandleCache() {
 +    char value[PROPERTY_VALUE_MAX] = {0};
@@ -157,14 +157,13 @@ index 7369ac75..1006adc9 100644
 +}
 +
 +static inline bool piscesBufferKey(native_handle_t* handle, unsigned long long* key) {
-+    if (handle == nullptr || handle->numFds < 1) {
++    // The composer hands over the same buffer_handle_t for the same buffer slot,
++    // so its address is a stable, process local key.  (The nvmap inode is shared
++    // by every buffer of the device and therefore useless as a key.)
++    if (handle == nullptr) {
 +        return false;
 +    }
-+    struct stat st = {};
-+    if (fstat(handle->data[0], &st) != 0) {
-+        return false;
-+    }
-+    *key = static_cast<unsigned long long>(st.st_ino);
++    *key = static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(handle));
 +    return *key != 0;
 +}
 +
@@ -338,7 +337,7 @@ index 7369ac75..1006adc9 100644
  // Gralloc0HalImpl implements V2_*::hal::MapperHal on top of gralloc0
  template <typename Hal>
  class Gralloc0HalImpl : public Hal {
-@@ -75,23 +397,129 @@ class Gralloc0HalImpl : public Hal {
+@@ -75,23 +396,129 @@ class Gralloc0HalImpl : public Hal {
  
      Error importBuffer(const native_handle_t* rawHandle,
                         native_handle_t** outBufferHandle) override {
