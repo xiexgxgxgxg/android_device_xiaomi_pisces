@@ -1,8 +1,8 @@
 diff --git a/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h b/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
-index 7369ac75..d9a28a47 100644
+index 7369ac75..14ce890c 100644
 --- a/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
 +++ b/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
-@@ -23,6 +23,13 @@
+@@ -23,6 +23,14 @@
  
  #include <hardware/gralloc.h>
  #include <log/log.h>
@@ -10,13 +10,14 @@ index 7369ac75..d9a28a47 100644
 +
 +#include <cstdlib>
 +#include <cstring>
++#include <sys/mman.h>
 +#include <mutex>
 +#include <vector>
 +#include <unordered_set>
  #include <mapper-hal/2.0/MapperHal.h>
  #include <mapper-passthrough/2.0/GrallocBufferDescriptor.h>
  #include <sync/sync.h>
-@@ -38,6 +45,183 @@ namespace detail {
+@@ -38,6 +46,191 @@ namespace detail {
  
  using common::V1_0::BufferUsage;
  
@@ -150,6 +151,14 @@ index 7369ac75..d9a28a47 100644
 +    }
 +}
 +
++// True when the page is currently mapped in this process.  A cloned handle can
++// carry a data[29] that points into the producing process' address space, and
++// copying that would fault.
++static inline bool piscesIsMapped(const void* address) {
++    unsigned char vec = 0;
++    return mincore(const_cast<void*>(address), 4096, &vec) == 0;
++}
++
 +static inline void* piscesPrivatePage(native_handle_t* handle) {
 +    const int index = (piscesPrivateOffset() - 12) / 4;
 +    if (handle->numFds + handle->numInts > index && index >= handle->numFds) {
@@ -200,7 +209,7 @@ index 7369ac75..d9a28a47 100644
  // Gralloc0HalImpl implements V2_*::hal::MapperHal on top of gralloc0
  template <typename Hal>
  class Gralloc0HalImpl : public Hal {
-@@ -75,23 +259,91 @@ class Gralloc0HalImpl : public Hal {
+@@ -75,23 +268,93 @@ class Gralloc0HalImpl : public Hal {
  
      Error importBuffer(const native_handle_t* rawHandle,
                         native_handle_t** outBufferHandle) override {
@@ -265,10 +274,12 @@ index 7369ac75..d9a28a47 100644
 +            // NvGrAddFence() reads valid memory.
 +            void* page = piscesPrivatePage(bufferHandle);
 +            void* copy = nullptr;
-+            if (posix_memalign(&copy, 4096, 4096) == 0 && copy != nullptr) {
-+                memcpy(copy, page, 4096);
-+            } else {
-+                copy = nullptr;
++            if (page != nullptr && piscesIsMapped(page)) {
++                if (posix_memalign(&copy, 4096, 4096) == 0 && copy != nullptr) {
++                    memcpy(copy, page, 4096);
++                } else {
++                    copy = nullptr;
++                }
 +            }
 +            if (mModule->unregisterBuffer(mModule, bufferHandle)) {
 +                free(copy);
