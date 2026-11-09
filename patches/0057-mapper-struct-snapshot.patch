@@ -1,8 +1,8 @@
 diff --git a/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h b/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
-index 7369ac75..14ce890c 100644
+index 7369ac75..1006adc9 100644
 --- a/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
 +++ b/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
-@@ -23,6 +23,14 @@
+@@ -23,6 +23,18 @@
  
  #include <hardware/gralloc.h>
  #include <log/log.h>
@@ -12,12 +12,16 @@ index 7369ac75..14ce890c 100644
 +#include <cstring>
 +#include <sys/mman.h>
 +#include <mutex>
++#include <unordered_map>
++#include <sys/stat.h>
++#include <utility>
++#include <thread>
 +#include <vector>
 +#include <unordered_set>
  #include <mapper-hal/2.0/MapperHal.h>
  #include <mapper-passthrough/2.0/GrallocBufferDescriptor.h>
  #include <sync/sync.h>
-@@ -38,6 +46,191 @@ namespace detail {
+@@ -38,6 +50,316 @@ namespace detail {
  
  using common::V1_0::BufferUsage;
  
@@ -131,6 +135,131 @@ index 7369ac75..14ce890c 100644
 +    return value[0] == '1';
 +}
 +
++// pisces: NvGrUnregisterBuffer() takes the mutex that lives inside the buffer
++// page - the same page the producing app maps - and waits on the buffer fences
++// while holding it, which stalls the app's render thread in NvGrLock.  The
++// composer imports and frees a handle for every frame, so that teardown happens
++// constantly.  Cache imported handles by buffer (the nvmap inode) and reuse
++// them, so a handle is only torn down when it is evicted from the cache.
++struct PiscesCachedHandle {
++    native_handle_t* handle;
++    int refs;
++};
++static std::mutex gPiscesCacheMutex;
++static std::unordered_map<unsigned long long, PiscesCachedHandle> gPiscesHandleCache;
++static std::vector<unsigned long long> gPiscesCacheOrder;
++static constexpr size_t kPiscesCacheLimit = 96;
++
++static inline bool piscesHandleCache() {
++    char value[PROPERTY_VALUE_MAX] = {0};
++    property_get("persist.pisces.mapper_handle_cache", value, "1");
++    return value[0] == '1';
++}
++
++static inline bool piscesBufferKey(native_handle_t* handle, unsigned long long* key) {
++    if (handle == nullptr || handle->numFds < 1) {
++        return false;
++    }
++    struct stat st = {};
++    if (fstat(handle->data[0], &st) != 0) {
++        return false;
++    }
++    *key = static_cast<unsigned long long>(st.st_ino);
++    return *key != 0;
++}
++
++// Returns a cached clone with an extra reference, or nullptr.
++static inline native_handle_t* piscesCacheAcquire(unsigned long long key) {
++    std::lock_guard<std::mutex> lock(gPiscesCacheMutex);
++    auto it = gPiscesHandleCache.find(key);
++    if (it == gPiscesHandleCache.end()) {
++        return nullptr;
++    }
++    it->second.refs++;
++    return it->second.handle;
++}
++
++// Adds a freshly imported clone to the cache.
++static inline void piscesCachePut(unsigned long long key, native_handle_t* handle) {
++    std::lock_guard<std::mutex> lock(gPiscesCacheMutex);
++    gPiscesHandleCache[key] = {handle, 1};
++    gPiscesCacheOrder.push_back(key);
++}
++
++// Drops one reference.  Returns true when the handle must be released now.
++static inline bool piscesCacheDrop(unsigned long long key) {
++    std::lock_guard<std::mutex> lock(gPiscesCacheMutex);
++    auto it = gPiscesHandleCache.find(key);
++    if (it == gPiscesHandleCache.end()) {
++        return true;
++    }
++    if (it->second.refs > 0) {
++        it->second.refs--;
++    }
++    return false;
++}
++
++// Pops one unreferenced entry when the cache is over its limit.
++static inline native_handle_t* piscesCacheEvict() {
++    std::lock_guard<std::mutex> lock(gPiscesCacheMutex);
++    if (gPiscesCacheOrder.size() <= kPiscesCacheLimit) {
++        return nullptr;
++    }
++    for (size_t i = 0; i < gPiscesCacheOrder.size(); i++) {
++        auto it = gPiscesHandleCache.find(gPiscesCacheOrder[i]);
++        if (it != gPiscesHandleCache.end() && it->second.refs <= 0) {
++            native_handle_t* handle = it->second.handle;
++            gPiscesHandleCache.erase(it);
++            gPiscesCacheOrder.erase(gPiscesCacheOrder.begin() + i);
++            return handle;
++        }
++    }
++    return nullptr;
++}
++
++static std::mutex gPiscesAsyncMutex;
++static std::vector<std::pair<gralloc_module_t const*, native_handle_t*>> gPiscesAsyncQueue;
++static bool gPiscesAsyncWorkerStarted = false;
++
++static inline bool piscesAsyncRelease() {
++    char value[PROPERTY_VALUE_MAX] = {0};
++    property_get("persist.pisces.mapper_async_release", value, "1");
++    return value[0] == '1';
++}
++
++static void piscesAsyncWorker() {
++    while (true) {
++        std::pair<gralloc_module_t const*, native_handle_t*> item;
++        {
++            std::lock_guard<std::mutex> lock(gPiscesAsyncMutex);
++            if (gPiscesAsyncQueue.empty()) {
++                item = {nullptr, nullptr};
++            } else {
++                item = gPiscesAsyncQueue.front();
++                gPiscesAsyncQueue.erase(gPiscesAsyncQueue.begin());
++            }
++        }
++        if (item.second == nullptr) {
++            usleep(2000);
++            continue;
++        }
++        if (item.first != nullptr) {
++            item.first->unregisterBuffer(item.first, item.second);
++        }
++    }
++}
++
++static inline void piscesQueueRelease(gralloc_module_t const* module, native_handle_t* handle) {
++    {
++        std::lock_guard<std::mutex> lock(gPiscesAsyncMutex);
++        if (!gPiscesAsyncWorkerStarted) {
++            gPiscesAsyncWorkerStarted = true;
++            std::thread(piscesAsyncWorker).detach();
++        }
++        gPiscesAsyncQueue.emplace_back(module, handle);
++    }
++}
++
 +static inline int piscesPrivateOffset() {
 +    return 128;   // handle->data[29]
 +}
@@ -209,13 +338,23 @@ index 7369ac75..14ce890c 100644
  // Gralloc0HalImpl implements V2_*::hal::MapperHal on top of gralloc0
  template <typename Hal>
  class Gralloc0HalImpl : public Hal {
-@@ -75,23 +268,93 @@ class Gralloc0HalImpl : public Hal {
+@@ -75,23 +397,129 @@ class Gralloc0HalImpl : public Hal {
  
      Error importBuffer(const native_handle_t* rawHandle,
                         native_handle_t** outBufferHandle) override {
 +        if (piscesMapperPassthrough()) {
 +            *outBufferHandle = const_cast<native_handle_t*>(rawHandle);
 +            return Error::NONE;
++        }
++        if (piscesHandleCache()) {
++            unsigned long long key = 0;
++            if (piscesBufferKey(const_cast<native_handle_t*>(rawHandle), &key)) {
++                native_handle_t* cached = piscesCacheAcquire(key);
++                if (cached != nullptr) {
++                    *outBufferHandle = cached;
++                    return Error::NONE;
++                }
++            }
 +        }
          native_handle_t* bufferHandle = native_handle_clone(rawHandle);
          if (!bufferHandle) {
@@ -247,6 +386,12 @@ index 7369ac75..14ce890c 100644
              return Error::BAD_BUFFER;
          }
  
++        if (piscesHandleCache()) {
++            unsigned long long key = 0;
++            if (piscesBufferKey(bufferHandle, &key)) {
++                piscesCachePut(key, bufferHandle);
++            }
++        }
 +        if (piscesRefcountLog()) {
 +            ALOGI("mapper import: owner=%d refcount=%d fds=%d ints=%d", piscesOwnerPid(bufferHandle),
 +                    piscesRefcount(bufferHandle), bufferHandle->numFds, bufferHandle->numInts);
@@ -258,6 +403,18 @@ index 7369ac75..14ce890c 100644
      }
  
      Error freeBuffer(native_handle_t* bufferHandle) override {
++        if (piscesHandleCache()) {
++            unsigned long long key = 0;
++            if (piscesBufferKey(bufferHandle, &key)) {
++                if (!piscesCacheDrop(key)) {
++                    native_handle_t* victim = piscesCacheEvict();
++                    if (victim != nullptr) {
++                        piscesQueueRelease(mModule, victim);
++                    }
++                    return Error::NONE;
++                }
++            }
++        }
 +        if (piscesDedupFree() && piscesAlreadyFreed(bufferHandle)) {
 +            return Error::NONE;
 +        }
@@ -280,6 +437,14 @@ index 7369ac75..14ce890c 100644
 +                } else {
 +                    copy = nullptr;
 +                }
++            }
++            if (piscesAsyncRelease()) {
++                piscesQueueRelease(mModule, bufferHandle);
++                if (copy != nullptr) {
++                    piscesSetPrivatePage(bufferHandle, copy);
++                    piscesRingPush(bufferHandle, copy);
++                }
++                return Error::NONE;
 +            }
 +            if (mModule->unregisterBuffer(mModule, bufferHandle)) {
 +                free(copy);
