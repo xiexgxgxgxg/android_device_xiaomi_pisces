@@ -1,5 +1,5 @@
 diff --git a/src/com/android/camera/VideoModule.java b/src/com/android/camera/VideoModule.java
-index 190cc248a..1f7678d44 100644
+index 190cc248a..27e771ed2 100644
 --- a/src/com/android/camera/VideoModule.java
 +++ b/src/com/android/camera/VideoModule.java
 @@ -17,6 +17,8 @@
@@ -199,7 +199,7 @@ index 190cc248a..1f7678d44 100644
          mUI.hideUIwhileRecording();
  
          // Make sure the video recording has started before announcing
-@@ -2210,6 +2299,92 @@ public class VideoModule implements CameraModule,
+@@ -2210,6 +2299,93 @@ public class VideoModule implements CameraModule,
          }
      }
  
@@ -250,7 +250,7 @@ index 190cc248a..1f7678d44 100644
 +    }
 +
 +    /** Stops the preview recorder and merges its video with the audio file. */
-+    private void stopPreviewVideoRecorder() {
++    private void stopPreviewVideoRecorder(String audioPath) {
 +        if (mCameraDevice != null) {
 +            mCameraDevice.setPreviewDataCallbackWithBuffer(mRecorderHandler, null);
 +        }
@@ -267,20 +267,21 @@ index 190cc248a..1f7678d44 100644
 +        mRecorderBuffer = null;
 +        String videoPath = mVideoTempPath;
 +        mVideoTempPath = null;
-+        if (videoPath == null || mVideoFilename == null) {
++        if (videoPath == null || audioPath == null) {
++            Log.w(TAG, "nothing to merge (video=" + videoPath + ", audio=" + audioPath + ")");
 +            return;
 +        }
 +        // Merge the preview-encoded video with the audio MediaRecorder wrote.
 +        // The muxer must not write over its own audio input, so go through a
 +        // temporary file and rename it into place afterwards.
-+        String mergedPath = mVideoFilename + ".merged";
-+        if (PreviewVideoRecorder.remux(videoPath, mVideoFilename, mergedPath,
++        String mergedPath = audioPath + ".merged";
++        if (PreviewVideoRecorder.remux(videoPath, audioPath, mergedPath,
 +                mMediaRecorderRotationHint)) {
 +            File merged = new File(mergedPath);
-+            File target = new File(mVideoFilename);
++            File target = new File(audioPath);
 +            if (merged.renameTo(target)) {
 +                new File(videoPath).delete();
-+                Log.i(TAG, "video track merged into " + mVideoFilename);
++                Log.i(TAG, "video track merged into " + audioPath);
 +            } else {
 +                Log.e(TAG, "could not rename " + mergedPath);
 +            }
@@ -292,11 +293,40 @@ index 190cc248a..1f7678d44 100644
      private boolean stopVideoRecording() {
          Log.v(TAG, "stopVideoRecording");
          mStopRecPending = true;
-@@ -2238,6 +2413,7 @@ public class VideoModule implements CameraModule,
+@@ -2238,6 +2414,25 @@ public class VideoModule implements CameraModule,
                  fail = true;
              }
              mMediaRecorderRecording = false;
-+            stopPreviewVideoRecorder();
++            // The encoder drain and the track merge take a while, so do them off
++            // the main thread - otherwise the UI freezes (the timer stops
++            // updating) and the app ends up ANR-killed.
++            final boolean addToMediaStoreNow = shouldAddToMediaStoreNow && !fail;
++            final String audioPath = mVideoFilename;
++            new Thread("VideoMerge") {
++                @Override
++                public void run() {
++                    stopPreviewVideoRecorder(audioPath);
++                    if (addToMediaStoreNow) {
++                        mHandler.post(new Runnable() {
++                            @Override
++                            public void run() {
++                                saveVideo();
++                            }
++                        });
++                    }
++                }
++            }.start();
  
              //If recording stops while snapshot is in progress, we might not get jpeg callback
              //because cameraservice will disable picture related messages. Hence reset the
+@@ -2261,9 +2456,7 @@ public class VideoModule implements CameraModule,
+             mUI.setOrientationIndicator(0, true);
+             keepScreenOnAwhile();
+             if (shouldAddToMediaStoreNow && !fail) {
+-                if (mVideoFileDescriptor == null) {
+-                    saveVideo();
+-                } else if (mIsVideoCaptureIntent) {
++                if (mVideoFileDescriptor != null && mIsVideoCaptureIntent) {
+                     // if no file save is needed, we can show the post capture UI now
+                     showCaptureResult();
+                 }
