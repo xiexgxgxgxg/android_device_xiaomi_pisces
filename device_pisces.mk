@@ -92,6 +92,11 @@ PRODUCT_COPY_FILES += \
 PRODUCT_PACKAGES += \
     dumpe2fs
 
+# pisces: every pisces specific workaround in frameworks/av is behind this
+# property, so the same source tree still behaves like stock on other devices.
+PRODUCT_PROPERTY_OVERRIDES += \
+    ro.pisces.camera_quirks=1
+
 # ril
 PRODUCT_PROPERTY_OVERRIDES += \
     persist.radio.apm_sim_not_pwdn=1
@@ -328,3 +333,7 @@ PRODUCT_PACKAGES += PiscesStub
 PRODUCT_COPY_FILES += \
     device/xiaomi/pisces/prebuilt/media_omx_service:system/bin/media_omx_service \
     device/xiaomi/pisces/prebuilt/libstagefrighthw.so:system/lib/libstagefrighthw.so
+
+# pisces: start the OMX HAL from a system process (see the rc for the details).
+PRODUCT_COPY_FILES += \
+    device/xiaomi/pisces/etc/init/init_pisces_omx.rc:system/etc/init/init_pisces_omx.rc

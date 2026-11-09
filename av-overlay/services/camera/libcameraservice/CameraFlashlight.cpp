@@ -32,6 +32,14 @@
 
 namespace android {
 
+// pisces: workarounds in this file only run on pisces (see the device tree).
+static bool piscesCameraQuirks() {
+    char value[PROPERTY_VALUE_MAX] = {0};
+    return property_get("ro.pisces.camera_quirks", value, "0") > 0 && value[0] == '1';
+}
+
+
+
 using hardware::camera::common::V1_0::TorchModeStatus;
 
 /////////////////////////////////////////////////////////////////////
@@ -88,7 +96,7 @@ status_t CameraFlashlight::setTorchMode(const String8& cameraId, bool enabled) {
      */
     {
         const char *kTorchLed = "/sys/class/leds/flashlight/brightness";
-        if (access(kTorchLed, W_OK) == 0) {
+        if (piscesCameraQuirks() && access(kTorchLed, W_OK) == 0) {
             FILE *led = fopen(kTorchLed, "we");
             if (led == NULL) {
                 ALOGE("%s: cannot open %s", __FUNCTION__, kTorchLed);

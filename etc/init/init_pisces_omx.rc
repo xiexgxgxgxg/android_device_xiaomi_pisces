@@ -1,0 +1,20 @@
+# pisces: run the OMX HAL from /system/bin so its linker namespace can load the
+# Nvidia components (libnvomx*.so in /system/lib) together with the NVOMXPlugin
+# shim.  A vendor process cannot reach those libraries, which left the framework
+# with the software codecs only.
+#
+# The stock vendor service is stopped early and this one is started with the
+# other main services, so the switch happens before any app asks for a codec.
+service media_omx_system /system/bin/media_omx_service
+    class main
+    user mediacodec
+    group camera drmrpc mediadrm
+    ioprio rt 4
+    writepid /dev/cpuset/foreground/tasks
+    disabled
+
+on early-init
+    stop vendor.media.omx
+
+on boot
+    start media_omx_system

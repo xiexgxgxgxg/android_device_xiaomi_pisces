@@ -80,6 +80,14 @@ namespace {
 
 namespace android {
 
+// pisces: workarounds in this file only run on pisces (see the device tree).
+static bool piscesCameraQuirks() {
+    char value[PROPERTY_VALUE_MAX] = {0};
+    return property_get("ro.pisces.camera_quirks", value, "0") > 0 && value[0] == '1';
+}
+
+
+
 using binder::Status;
 using hardware::ICamera;
 using hardware::ICameraClient;
@@ -448,6 +456,19 @@ Status CameraService::getCameraInfo(int cameraId,
     Status ret = Status::ok();
     status_t err = mCameraProviderManager->getCameraInfo(
             cameraIdIntToStrLocked(cameraId), cameraInfo);
+    if (err != OK && piscesCameraQuirks()) {
+        // pisces: the legacy provider is torn down on every camera close and
+        // respawned by init, so a static query can hit a dead provider - which
+        // is what made Snap crash with "Fail to get camera info" when entering
+        // video mode.  Wait for the restart and retry before reporting an error.
+        for (int attempt = 0; attempt < 10 && err != OK; attempt++) {
+            mServiceLock.unlock();
+            usleep(100000);
+            mServiceLock.lock();
+            err = mCameraProviderManager->getCameraInfo(
+                    cameraIdIntToStrLocked(cameraId), cameraInfo);
+        }
+    }
     if (err != OK) {
         ret = STATUS_ERROR_FMT(ERROR_INVALID_OPERATION,
                 "Error retrieving camera info from device %d: %s (%d)", cameraId,

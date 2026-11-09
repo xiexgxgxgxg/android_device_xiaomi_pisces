@@ -19,6 +19,7 @@
 //#define LOG_NDEBUG 0
 
 #include <utils/Log.h>
+#include <cutils/properties.h>
 #include <utils/threads.h>
 #include <binder/IPCThreadState.h>
 #include <binder/IServiceManager.h>
@@ -31,6 +32,14 @@
 #include <soundtrigger/SoundTriggerCallback.h>
 
 namespace android {
+
+// pisces: workarounds in this file only run on pisces (see the device tree).
+static bool piscesCameraQuirks() {
+    char value[PROPERTY_VALUE_MAX] = {0};
+    return property_get("ro.pisces.camera_quirks", value, "0") > 0 && value[0] == '1';
+}
+
+
 
 namespace {
     sp<ISoundTriggerHwService> gSoundTriggerHwService;
@@ -61,19 +70,23 @@ const sp<ISoundTriggerHwService> SoundTrigger::getSoundTriggerHwService()
     if (gSoundTriggerHwService.get() == 0) {
         sp<IServiceManager> sm = defaultServiceManager();
         sp<IBinder> binder;
-        // pisces: do not block boot forever when the sound trigger HAL is
-        // missing (audioserver is not able to publish it yet).
-        for (int i = 0; i < 1; i++) {
+        if (piscesCameraQuirks()) {
+            // pisces: do not block boot forever when the sound trigger HAL is
+            // missing (audioserver is not able to publish it yet).
             binder = sm->getService(String16(kSoundTriggerHwServiceName));
-            if (binder != 0) {
-                break;
+            if (binder == 0) {
+                ALOGE("SoundTriggerHwService never appeared; continuing without it");
+                return 0;
             }
-            ALOGW("SoundTriggerHwService not published, waiting...");
-            usleep(kSoundTriggerHwServicePollDelay);
-        }
-        if (binder == 0) {
-            ALOGE("SoundTriggerHwService never appeared; continuing without it");
-            return 0;
+        } else {
+            do {
+                binder = sm->getService(String16(kSoundTriggerHwServiceName));
+                if (binder != 0) {
+                    break;
+                }
+                ALOGW("SoundTriggerHwService not published, waiting...");
+                usleep(kSoundTriggerHwServicePollDelay);
+            } while (true);
         }
         if (gDeathNotifier == NULL) {
             gDeathNotifier = new DeathNotifier();
