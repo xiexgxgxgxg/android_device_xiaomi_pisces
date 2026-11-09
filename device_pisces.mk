@@ -95,7 +95,8 @@ PRODUCT_PACKAGES += \
 # pisces: every pisces specific workaround in frameworks/av is behind this
 # property, so the same source tree still behaves like stock on other devices.
 PRODUCT_PROPERTY_OVERRIDES += \
-    ro.pisces.camera_quirks=1
+    ro.pisces.camera_quirks=1 \
+    persist.pisces.gralloc_pidfix=1
 
 # ril
 PRODUCT_PROPERTY_OVERRIDES += \

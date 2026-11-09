@@ -1,5 +1,5 @@
 diff --git a/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h b/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
-index 7369ac75..f465d9d6 100644
+index 7369ac75..cc93bf7b 100644
 --- a/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
 +++ b/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
 @@ -23,6 +23,7 @@
@@ -36,7 +36,7 @@ index 7369ac75..f465d9d6 100644
  // Gralloc0HalImpl implements V2_*::hal::MapperHal on top of gralloc0
  template <typename Hal>
  class Gralloc0HalImpl : public Hal {
-@@ -75,11 +95,28 @@ class Gralloc0HalImpl : public Hal {
+@@ -75,11 +95,30 @@ class Gralloc0HalImpl : public Hal {
  
      Error importBuffer(const native_handle_t* rawHandle,
                         native_handle_t** outBufferHandle) override {
@@ -57,15 +57,17 @@ index 7369ac75..f465d9d6 100644
 +            // inside the handle pointing at the other process's memory - which
 +            // is what crashed the composer in NvGrAddFence/NvGrUnregisterBuffer.
 +            // Clearing it forces the full registration path.
-+            if (bufferHandle->numInts > 0) {
-+                bufferHandle->data[bufferHandle->numFds] = 0;
++            // NvGrRegisterBuffer() reads the owning pid from data[2] (offset
++            // 20) exactly; clearing any other slot corrupts an fd instead.
++            if (bufferHandle->numFds + bufferHandle->numInts > 2) {
++                bufferHandle->data[2] = 0;
 +            }
 +        }
 +
          if (mModule->registerBuffer(mModule, bufferHandle)) {
              native_handle_close(bufferHandle);
              native_handle_delete(bufferHandle);
-@@ -92,6 +129,9 @@ class Gralloc0HalImpl : public Hal {
+@@ -92,6 +131,9 @@ class Gralloc0HalImpl : public Hal {
      }
  
      Error freeBuffer(native_handle_t* bufferHandle) override {
