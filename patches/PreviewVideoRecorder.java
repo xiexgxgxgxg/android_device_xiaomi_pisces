@@ -65,6 +65,7 @@ public class PreviewVideoRecorder {
     private byte[] mConvert;
     private byte[] mAudioBuffer;
     private int mVideoFrames;
+    private long mStartTimeUs;
     private int mDroppedFrames;
 
     /** Thrown when the encoder cannot be set up. */
@@ -84,6 +85,7 @@ public class PreviewVideoRecorder {
         mHeight = height;
         mVideoFrames = 0;
         mDroppedFrames = 0;
+        mStartTimeUs = System.nanoTime() / 1000;
         mStopping = false;
         mReleased = false;
         mMuxerStarted = false;
@@ -293,7 +295,9 @@ public class PreviewVideoRecorder {
             }
             buffer.clear();
             buffer.put(mConvert, 0, mConvert.length);
-            long ptsUs = System.nanoTime() / 1000;
+            // Presentation times must be relative to the start of the recording:
+            // absolute values made the merged file report a bogus duration.
+            long ptsUs = System.nanoTime() / 1000 - mStartTimeUs;
             mVideoEncoder.queueInputBuffer(index, 0, mConvert.length, ptsUs, 0);
             mVideoFrames++;
             drainEncoder(mVideoEncoder, false);
