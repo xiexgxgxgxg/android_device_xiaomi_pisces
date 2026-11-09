@@ -1,0 +1,24 @@
+diff --git a/services/core/java/com/android/server/wm/TaskSnapshotController.java b/services/core/java/com/android/server/wm/TaskSnapshotController.java
+index 733a2486215..5b98a8cab30 100644
+--- a/services/core/java/com/android/server/wm/TaskSnapshotController.java
++++ b/services/core/java/com/android/server/wm/TaskSnapshotController.java
+@@ -165,7 +165,19 @@ class TaskSnapshotController {
+         mSkipClosingAppSnapshotTasks.addAll(tasks);
+     }
+ 
++    // pisces: the real snapshot capture goes through
++    // SurfaceComposer::captureLayers, which on this device can block for a long
++    // time while it holds the window map lock - the whole system then waits on
++    // it until the watchdog kills system_server.  Skip the capture and let the
++    // recents UI fall back to the app icon.
++    private static boolean piscesSkipSnapshots() {
++        return android.os.SystemProperties.getBoolean("persist.pisces.no_task_snapshots", true);
++    }
++
+     void snapshotTasks(ArraySet<Task> tasks) {
++        if (piscesSkipSnapshots()) {
++            return;
++        }
+         for (int i = tasks.size() - 1; i >= 0; i--) {
+             final Task task = tasks.valueAt(i);
+             final int mode = getSnapshotMode(task);
