@@ -1,5 +1,5 @@
 diff --git a/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h b/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
-index 7369ac75..cc93bf7b 100644
+index 7369ac75..8b91d0fe 100644
 --- a/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
 +++ b/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
 @@ -23,6 +23,7 @@
@@ -10,7 +10,7 @@ index 7369ac75..cc93bf7b 100644
  #include <mapper-hal/2.0/MapperHal.h>
  #include <mapper-passthrough/2.0/GrallocBufferDescriptor.h>
  #include <sync/sync.h>
-@@ -38,6 +39,25 @@ namespace detail {
+@@ -38,6 +39,34 @@ namespace detail {
  
  using common::V1_0::BufferUsage;
  
@@ -19,6 +19,15 @@ index 7369ac75..cc93bf7b 100644
 +// (destroyLayer) and NvGrAddFence (presentDisplay) when it was given our clones.
 +// Toggle with persist.pisces.mapper_passthrough for A/B testing.
 +// pisces: force a full (re)registration of cloned buffer handles, see below.
++// pisces: the NVIDIA HWC unregisters the buffers it releases itself, so calling
++// unregisterBuffer() from here as well drives the refcount negative and the
++// second teardown dereferences an already munmapped private mapping.
++static inline bool piscesGrallocNoUnregister() {
++    char value[PROPERTY_VALUE_MAX] = {0};
++    property_get("persist.pisces.gralloc_nounregister", value, "0");
++    return value[0] == '1';
++}
++
 +static inline bool piscesGrallocPidFix() {
 +    char value[PROPERTY_VALUE_MAX] = {0};
 +    property_get("persist.pisces.gralloc_pidfix", value, "0");
@@ -36,7 +45,7 @@ index 7369ac75..cc93bf7b 100644
  // Gralloc0HalImpl implements V2_*::hal::MapperHal on top of gralloc0
  template <typename Hal>
  class Gralloc0HalImpl : public Hal {
-@@ -75,11 +95,30 @@ class Gralloc0HalImpl : public Hal {
+@@ -75,11 +104,30 @@ class Gralloc0HalImpl : public Hal {
  
      Error importBuffer(const native_handle_t* rawHandle,
                         native_handle_t** outBufferHandle) override {
@@ -67,11 +76,16 @@ index 7369ac75..cc93bf7b 100644
          if (mModule->registerBuffer(mModule, bufferHandle)) {
              native_handle_close(bufferHandle);
              native_handle_delete(bufferHandle);
-@@ -92,6 +131,9 @@ class Gralloc0HalImpl : public Hal {
+@@ -92,6 +140,14 @@ class Gralloc0HalImpl : public Hal {
      }
  
      Error freeBuffer(native_handle_t* bufferHandle) override {
 +        if (piscesMapperPassthrough()) {
++            return Error::NONE;
++        }
++        if (piscesGrallocNoUnregister()) {
++            native_handle_close(bufferHandle);
++            native_handle_delete(bufferHandle);
 +            return Error::NONE;
 +        }
          if (mModule->unregisterBuffer(mModule, bufferHandle)) {

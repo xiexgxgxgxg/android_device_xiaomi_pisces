@@ -96,7 +96,8 @@ PRODUCT_PACKAGES += \
 # property, so the same source tree still behaves like stock on other devices.
 PRODUCT_PROPERTY_OVERRIDES += \
     ro.pisces.camera_quirks=1 \
-    persist.pisces.gralloc_pidfix=1
+    persist.pisces.gralloc_pidfix=1 \
+    persist.pisces.gralloc_nounregister=1
 
 # ril
 PRODUCT_PROPERTY_OVERRIDES += \
