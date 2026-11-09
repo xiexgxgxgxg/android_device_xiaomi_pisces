@@ -1,0 +1,294 @@
+diff --git a/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h b/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
+index 7369ac75..d9a28a47 100644
+--- a/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
++++ b/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
+@@ -23,6 +23,13 @@
+ 
+ #include <hardware/gralloc.h>
+ #include <log/log.h>
++#include <cutils/properties.h>
++
++#include <cstdlib>
++#include <cstring>
++#include <mutex>
++#include <vector>
++#include <unordered_set>
+ #include <mapper-hal/2.0/MapperHal.h>
+ #include <mapper-passthrough/2.0/GrallocBufferDescriptor.h>
+ #include <sync/sync.h>
+@@ -38,6 +45,183 @@ namespace detail {
+ 
+ using common::V1_0::BufferUsage;
+ 
++// pisces: hand the buffer handles straight through to the HAL instead of cloning
++// and registering them.  The NVIDIA composer crashed inside NvGrUnregisterBuffer
++// (destroyLayer) and NvGrAddFence (presentDisplay) when it was given our clones.
++// Toggle with persist.pisces.mapper_passthrough for A/B testing.
++// pisces: force a full (re)registration of cloned buffer handles, see below.
++// pisces: the NVIDIA HWC unregisters the buffers it releases itself, so calling
++// unregisterBuffer() from here as well drives the refcount negative and the
++// second teardown dereferences an already munmapped private mapping.
++// pisces: the NVIDIA HWC registers and unregisters the buffers it composes
++// itself, and the refcount (plus the mmap pointer) lives inside the buffer
++// handle.  Registering from the mapper as well makes the two owners fight over
++// that shared state: the count goes negative, the teardown runs twice and the
++// composer dies with "pthread_mutex_destroy called on a destroyed mutex" (or
++// dereferences an already unmapped private mapping).  In pure clone mode the
++// mapper only hands the HAL a private copy of the handle.
++static inline bool piscesMapperPureClone() {
++    char value[PROPERTY_VALUE_MAX] = {0};
++    property_get("persist.pisces.mapper_pure_clone", value, "1");
++    return value[0] == '1';
++}
++
++static inline bool piscesGrallocNoUnregister() {
++    char value[PROPERTY_VALUE_MAX] = {0};
++    property_get("persist.pisces.gralloc_nounregister", value, "0");
++    return value[0] == '1';
++}
++
++// pisces: the NVIDIA gralloc keeps its per-buffer bookkeeping inside the
++// handle (owner pid at data[2], refcount at byte offset 152, private mapping at
++// byte offset 128).  Logging the refcount on import/free shows whether the HWC
++// also registers/unregisters the same handle.
++static inline int piscesRefcount(native_handle_t* handle) {
++    const int index = (152 - 12) / 4;
++    if (handle->numFds + handle->numInts > index && index >= handle->numFds) {
++        return handle->data[index];
++    }
++    return -1;
++}
++
++static inline int piscesOwnerPid(native_handle_t* handle) {
++    if (handle->numFds + handle->numInts > 2 && 2 >= handle->numFds) {
++        return handle->data[2];
++    }
++    return -1;
++}
++
++// pisces: the vendor composer sometimes frees the very same imported handle
++// twice.  A second NvGrUnregisterBuffer() drives the in-handle refcount negative
++// and tears the private mapping down again, which aborts with
++// "pthread_mutex_destroy called on a destroyed mutex".  Remember the pointers we
++// already released and turn the duplicate into a no-op.
++static std::mutex gPiscesFreedMutex;
++static std::unordered_set<const void*> gPiscesFreedHandles;
++
++// Returns true when this handle was already freed once.
++static inline bool piscesAlreadyFreed(const void* handle) {
++    if (!handle) {
++        return true;
++    }
++    std::lock_guard<std::mutex> lock(gPiscesFreedMutex);
++    if (gPiscesFreedHandles.size() > 8192) {
++        gPiscesFreedHandles.clear();
++    }
++    return !gPiscesFreedHandles.insert(handle).second;
++}
++
++// pisces: the vendor HWC keeps using a buffer handle after the composer has
++// released it (NvGrAddFence then reads handle->data[29], which we had already
++// torn down - the null/stale pointer crash).  Instead of releasing immediately,
++// keep the last few clones alive (with their registration and mapping) and only
++// tear the oldest one down once the quarantine is full.  The HWC's stale use is
++// within a frame or two, so a small window is enough.
++static std::mutex gPiscesQuarantineMutex;
++static std::vector<native_handle_t*> gPiscesQuarantine;
++static constexpr size_t kPiscesQuarantineSize = 2;
++
++// Returns true when the handle was queued instead of being released now.
++static inline bool piscesQuarantinePush(native_handle_t* handle, gralloc_module_t const* module) {
++    std::lock_guard<std::mutex> lock(gPiscesQuarantineMutex);
++    gPiscesQuarantine.push_back(handle);
++    if (gPiscesQuarantine.size() <= kPiscesQuarantineSize) {
++        return true;
++    }
++    native_handle_t* oldest = gPiscesQuarantine.front();
++    gPiscesQuarantine.erase(gPiscesQuarantine.begin());
++    if (module && oldest) {
++        module->unregisterBuffer(module, oldest);
++        native_handle_close(oldest);
++        native_handle_delete(oldest);
++    }
++    return true;
++}
++
++// pisces: NvGrAddFence() reads a small structure through handle->data[29],
++// which is the mapping of the buffer's first page (the vendor maps 4096 bytes,
++// not the whole buffer).  The vendor HWC keeps using a handle after the composer
++// released it, and once the vendor unregister has munmapped that page the read
++// faults.  Instead of retaining the buffer (the earlier quarantine pinned whole
++// buffers), keep a 4 KB snapshot of that page attached to the clone: the stale
++// read then hits valid memory and only costs a kilobyte per released handle.
++static std::mutex gPiscesSnapshotMutex;
++static std::vector<std::pair<native_handle_t*, void*>> gPiscesSnapshots;
++static constexpr size_t kPiscesSnapshotRing = 256;
++
++static inline bool piscesStructSnapshot() {
++    char value[PROPERTY_VALUE_MAX] = {0};
++    property_get("persist.pisces.mapper_snapshot", value, "1");
++    return value[0] == '1';
++}
++
++static inline int piscesPrivateOffset() {
++    return 128;   // handle->data[29]
++}
++
++// Keeps the (handle, snapshot) pair alive for a while.
++static inline void piscesRingPush(native_handle_t* handle, void* copy) {
++    if (!handle || !copy) {
++        return;
++    }
++    std::lock_guard<std::mutex> lock(gPiscesSnapshotMutex);
++    gPiscesSnapshots.emplace_back(handle, copy);
++    if (gPiscesSnapshots.size() > kPiscesSnapshotRing) {
++        auto victim = gPiscesSnapshots.front();
++        gPiscesSnapshots.erase(gPiscesSnapshots.begin());
++        free(victim.second);
++        native_handle_close(victim.first);
++        native_handle_delete(victim.first);
++    }
++}
++
++static inline void* piscesPrivatePage(native_handle_t* handle) {
++    const int index = (piscesPrivateOffset() - 12) / 4;
++    if (handle->numFds + handle->numInts > index && index >= handle->numFds) {
++        return reinterpret_cast<void*>(static_cast<uintptr_t>(handle->data[index]));
++    }
++    return nullptr;
++}
++
++static inline void piscesSetPrivatePage(native_handle_t* handle, void* page) {
++    const int index = (piscesPrivateOffset() - 12) / 4;
++    if (handle->numFds + handle->numInts > index && index >= handle->numFds) {
++        handle->data[index] = static_cast<int>(reinterpret_cast<uintptr_t>(page));
++    }
++}
++
++static inline bool piscesQuarantineFree() {
++    char value[PROPERTY_VALUE_MAX] = {0};
++    property_get("persist.pisces.mapper_quarantine", value, "1");
++    return value[0] == '1';
++}
++
++static inline bool piscesDedupFree() {
++    char value[PROPERTY_VALUE_MAX] = {0};
++    property_get("persist.pisces.mapper_dedup_free", value, "1");
++    return value[0] == '1';
++}
++
++static inline bool piscesRefcountLog() {
++    char value[PROPERTY_VALUE_MAX] = {0};
++    property_get("persist.pisces.mapper_log", value, "0");
++    return value[0] == '1';
++}
++
++static inline bool piscesGrallocPidFix() {
++    char value[PROPERTY_VALUE_MAX] = {0};
++    property_get("persist.pisces.gralloc_pidfix", value, "0");
++    return value[0] == '1';
++}
++
++static inline bool piscesMapperPassthrough() {
++    char value[PROPERTY_VALUE_MAX] = {0};
++    property_get("persist.pisces.mapper_passthrough", value, "0");
++    return value[0] == '1';
++}
++
++
++
+ // Gralloc0HalImpl implements V2_*::hal::MapperHal on top of gralloc0
+ template <typename Hal>
+ class Gralloc0HalImpl : public Hal {
+@@ -75,23 +259,91 @@ class Gralloc0HalImpl : public Hal {
+ 
+     Error importBuffer(const native_handle_t* rawHandle,
+                        native_handle_t** outBufferHandle) override {
++        if (piscesMapperPassthrough()) {
++            *outBufferHandle = const_cast<native_handle_t*>(rawHandle);
++            return Error::NONE;
++        }
+         native_handle_t* bufferHandle = native_handle_clone(rawHandle);
+         if (!bufferHandle) {
+             return Error::NO_RESOURCES;
+         }
+ 
++        if (piscesMapperPureClone()) {
++            return Error::NONE;
++        }
++
++        if (piscesGrallocPidFix()) {
++            // NVIDIA's gralloc keeps the owning pid in the first int of the
++            // handle and NvGrRegisterBuffer() only bumps a refcount when that
++            // pid matches the caller.  A clone inherits the source process's
++            // pid, so the shortcut can fire and leave the private pointers
++            // inside the handle pointing at the other process's memory - which
++            // is what crashed the composer in NvGrAddFence/NvGrUnregisterBuffer.
++            // Clearing it forces the full registration path.
++            // NvGrRegisterBuffer() reads the owning pid from data[2] (offset
++            // 20) exactly; clearing any other slot corrupts an fd instead.
++            if (bufferHandle->numFds + bufferHandle->numInts > 2) {
++                bufferHandle->data[2] = 0;
++            }
++        }
++
+         if (mModule->registerBuffer(mModule, bufferHandle)) {
+             native_handle_close(bufferHandle);
+             native_handle_delete(bufferHandle);
+             return Error::BAD_BUFFER;
+         }
+ 
++        if (piscesRefcountLog()) {
++            ALOGI("mapper import: owner=%d refcount=%d fds=%d ints=%d", piscesOwnerPid(bufferHandle),
++                    piscesRefcount(bufferHandle), bufferHandle->numFds, bufferHandle->numInts);
++        }
++
+         *outBufferHandle = bufferHandle;
+ 
+         return Error::NONE;
+     }
+ 
+     Error freeBuffer(native_handle_t* bufferHandle) override {
++        if (piscesDedupFree() && piscesAlreadyFreed(bufferHandle)) {
++            return Error::NONE;
++        }
++        if (piscesRefcountLog()) {
++            ALOGI("mapper free: owner=%d refcount=%d", piscesOwnerPid(bufferHandle),
++                    piscesRefcount(bufferHandle));
++        }
++        if (piscesMapperPassthrough()) {
++            return Error::NONE;
++        }
++        if (piscesStructSnapshot() && piscesPrivatePage(bufferHandle) != nullptr) {
++            // Copy the page while it is still mapped, then let the vendor tear
++            // the registration down and point data[29] at our copy so a later
++            // NvGrAddFence() reads valid memory.
++            void* page = piscesPrivatePage(bufferHandle);
++            void* copy = nullptr;
++            if (posix_memalign(&copy, 4096, 4096) == 0 && copy != nullptr) {
++                memcpy(copy, page, 4096);
++            } else {
++                copy = nullptr;
++            }
++            if (mModule->unregisterBuffer(mModule, bufferHandle)) {
++                free(copy);
++                return Error::BAD_BUFFER;
++            }
++            if (copy != nullptr) {
++                piscesSetPrivatePage(bufferHandle, copy);
++                piscesRingPush(bufferHandle, copy);
++            }
++            return Error::NONE;
++        }
++        if (piscesQuarantineFree()) {
++            piscesQuarantinePush(bufferHandle, mModule);
++            return Error::NONE;
++        }
++        if (piscesMapperPureClone() || piscesGrallocNoUnregister()) {
++            native_handle_close(bufferHandle);
++            native_handle_delete(bufferHandle);
++            return Error::NONE;
++        }
+         if (mModule->unregisterBuffer(mModule, bufferHandle)) {
+             return Error::BAD_BUFFER;
+         }
