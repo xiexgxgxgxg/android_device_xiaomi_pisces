@@ -66,6 +66,8 @@ public class PreviewVideoRecorder {
     private int mHeight;
     private byte[] mConvert;
     private int mColorFormat;
+    private boolean mUseFlexibleImage;
+    private android.media.Image mFlexibleImage;
     private byte[] mAudioBuffer;
     private int mVideoFrames;
     private long mStartTimeUs;
@@ -132,6 +134,7 @@ public class PreviewVideoRecorder {
 
             mColorFormat = colorFormat;
             mConvert = new byte[width * height * 3 / 2];
+            mUseFlexibleImage = colorFormat == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible;
         } catch (Exception e) {
             Log.e(TAG, "cannot start the encoders", e);
             release();
@@ -309,6 +312,15 @@ public class PreviewVideoRecorder {
                 mConvert[uIndex + i] = uvSwap ? first : second;
                 mConvert[vIndex + i] = uvSwap ? second : first;
             }
+        } else if (mColorFormat == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible
+                && mFlexibleImage != null) {
+            // The encoder chose COLOR_FormatYUV420Flexible: its buffers follow the
+            // Image strides, which do not have to be tight.  Write the planes
+            // through getInputImage() so the chroma lands where the codec expects
+            // it (otherwise the video loses its colours).
+            copyPlane(mFlexibleImage.getPlanes()[0], nv21, 0, 1);
+            copyPlane(mFlexibleImage.getPlanes()[1], nv21, ySize + 1, 2);
+            copyPlane(mFlexibleImage.getPlanes()[2], nv21, ySize, 2);
         } else {
             for (int i = ySize; i + 1 < mConvert.length; i += 2) {
                 if (uvSwap) {
@@ -330,8 +342,13 @@ public class PreviewVideoRecorder {
             if (buffer == null) {
                 return;
             }
+            if (mUseFlexibleImage) {
+                mFlexibleImage = mVideoEncoder.getInputImage(index);
+            }
             buffer.clear();
-            buffer.put(mConvert, 0, mConvert.length);
+            if (!mUseFlexibleImage || mFlexibleImage == null) {
+                buffer.put(mConvert, 0, mConvert.length);
+            }
             // Presentation times must be relative to the start of the recording:
             // absolute values made the merged file report a bogus duration.
             long ptsUs = System.nanoTime() / 1000 - mStartTimeUs;
@@ -340,6 +357,28 @@ public class PreviewVideoRecorder {
             drainEncoder(mVideoEncoder, false);
         } catch (IllegalStateException e) {
             Log.w(TAG, "video encoder gone", e);
+        }
+    }
+
+    /** Copies one Image plane out of the NV21 frame, honouring its strides. */
+    private void copyPlane(android.media.Image.Plane plane, byte[] nv21, int offset, int step) {
+        java.nio.ByteBuffer buffer = plane.getBuffer();
+        int rowStride = plane.getRowStride();
+        int pixelStride = plane.getPixelStride();
+        int planeWidth = (step == 1) ? mWidth : mWidth / 2;
+        int planeHeight = (step == 1) ? mHeight : mHeight / 2;
+        byte[] row = new byte[planeWidth * pixelStride];
+        for (int y = 0; y < planeHeight; y++) {
+            buffer.position(y * rowStride);
+            buffer.get(row);
+            for (int x = 0; x < planeWidth; x++) {
+                int source = offset + (y * planeWidth + x) * step;
+                if (source < nv21.length) {
+                    row[x * pixelStride] = nv21[source];
+                }
+            }
+            buffer.position(y * rowStride);
+            buffer.put(row);
         }
     }
 

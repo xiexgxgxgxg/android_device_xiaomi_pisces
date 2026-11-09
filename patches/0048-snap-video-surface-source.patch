@@ -1,5 +1,5 @@
 diff --git a/src/com/android/camera/VideoModule.java b/src/com/android/camera/VideoModule.java
-index 190cc248a..9738f09dd 100644
+index 190cc248a..0d51bba6a 100644
 --- a/src/com/android/camera/VideoModule.java
 +++ b/src/com/android/camera/VideoModule.java
 @@ -17,6 +17,8 @@
@@ -27,7 +27,16 @@ index 190cc248a..9738f09dd 100644
  import android.view.SurfaceHolder;
  import android.view.View;
  import android.view.WindowManager;
-@@ -97,6 +101,16 @@ public class VideoModule implements CameraModule,
+@@ -79,6 +83,8 @@ import org.codeaurora.snapcam.wrapper.ParametersWrapper;
+ import org.codeaurora.snapcam.wrapper.CamcorderProfileWrapper;
+ 
+ import java.io.File;
++import java.io.FileInputStream;
++import java.io.FileOutputStream;
+ import java.io.IOException;
+ import java.text.SimpleDateFormat;
+ import java.util.Date;
+@@ -97,6 +103,17 @@ public class VideoModule implements CameraModule,
      MediaRecorder.OnErrorListener,
      MediaRecorder.OnInfoListener {
  
@@ -39,12 +48,13 @@ index 190cc248a..9738f09dd 100644
 +    private Handler mRecorderHandler;
 +    private byte[] mRecorderBuffer;
 +    private String mVideoTempPath;
++    private String mAudioPath;
 +    private int mMediaRecorderRotationHint;
 +
      private static final String TAG = "CAM_VideoModule";
  
      private static final int CHECK_DISPLAY_ROTATION = 3;
-@@ -1185,6 +1199,23 @@ public class VideoModule implements CameraModule,
+@@ -1185,6 +1202,23 @@ public class VideoModule implements CameraModule,
              mDesiredPreviewWidth = optimalSize.width;
              mDesiredPreviewHeight = optimalSize.height;
          }
@@ -68,7 +78,7 @@ index 190cc248a..9738f09dd 100644
          mUI.setPreviewSize(mDesiredPreviewWidth, mDesiredPreviewHeight);
          Log.v(TAG, "mDesiredPreviewWidth=" + mDesiredPreviewWidth +
                  ". mDesiredPreviewHeight=" + mDesiredPreviewHeight);
-@@ -1631,6 +1662,80 @@ public class VideoModule implements CameraModule,
+@@ -1631,6 +1665,80 @@ public class VideoModule implements CameraModule,
          }
      }
  
@@ -149,7 +159,7 @@ index 190cc248a..9738f09dd 100644
      private void setupMediaRecorderPreviewDisplay() {
          mFocusManager.resetTouchFocus();
          // Nothing to do here if using SurfaceTexture.
-@@ -1733,9 +1838,8 @@ public class VideoModule implements CameraModule,
+@@ -1733,9 +1841,8 @@ public class VideoModule implements CameraModule,
          }
          mMediaRecorder = new MediaRecorder();
  
@@ -161,7 +171,7 @@ index 190cc248a..9738f09dd 100644
  
          String hfr = ParametersWrapper.getVideoHighFrameRate(mParameters);
          String hsr =  mParameters.get(CameraSettings.KEY_VIDEO_HSR);
-@@ -1752,7 +1856,6 @@ public class VideoModule implements CameraModule,
+@@ -1752,7 +1859,6 @@ public class VideoModule implements CameraModule,
              Log.e(TAG, "Invalid hfr(" + hfr + ") or hsr(" + hsr + ")");
          }
  
@@ -169,7 +179,7 @@ index 190cc248a..9738f09dd 100644
  
          mProfile.videoCodec = mVideoEncoder;
          mProfile.audioCodec = mAudioEncoder;
-@@ -1781,14 +1884,17 @@ public class VideoModule implements CameraModule,
+@@ -1781,14 +1887,17 @@ public class VideoModule implements CameraModule,
                  mMediaRecorder.setAudioEncoder(mProfile.audioCodec);
              }
          } else {
@@ -193,7 +203,20 @@ index 190cc248a..9738f09dd 100644
          mMediaRecorder.setMaxDuration(mMaxVideoDurationInMs);
          if (mCaptureTimeLapse) {
              double fps = 1000 / (double) mTimeBetweenTimeLapseFrameCaptureMs;
-@@ -1853,15 +1959,18 @@ public class VideoModule implements CameraModule,
+@@ -1825,7 +1934,11 @@ public class VideoModule implements CameraModule,
+             mMediaRecorder.setOutputFile(mVideoFileDescriptor.getFileDescriptor());
+         } else {
+             generateVideoFilename(mProfile.fileFormat);
+-            mMediaRecorder.setOutputFile(mVideoFilename);
++            // pisces: the recorder writes the audio into the app cache so the
++            // media scanner never picks up a half finished file (the gallery
++            // used to crash when it decoded one while the merge was running).
++            mAudioPath = new File(mActivity.getCacheDir(), "recording.mp4").getAbsolutePath();
++            mMediaRecorder.setOutputFile(mAudioPath);
+         }
+ 
+         // Set maximum file size.
+@@ -1853,15 +1966,18 @@ public class VideoModule implements CameraModule,
          // what activity.getWindowManager().getDefaultDisplay().getRotation() would return,
          // which is the orientation the graphics need to rotate in order to render correctly.
          int rotation = 0;
@@ -219,7 +242,7 @@ index 190cc248a..9738f09dd 100644
          setupMediaRecorderPreviewDisplay();
  
          try {
-@@ -2116,6 +2225,8 @@ public class VideoModule implements CameraModule,
+@@ -2116,6 +2232,8 @@ public class VideoModule implements CameraModule,
              return false;
          }
  
@@ -228,7 +251,7 @@ index 190cc248a..9738f09dd 100644
          mUI.hideUIwhileRecording();
  
          // Make sure the video recording has started before announcing
-@@ -2210,6 +2321,86 @@ public class VideoModule implements CameraModule,
+@@ -2210,6 +2328,132 @@ public class VideoModule implements CameraModule,
          }
      }
  
@@ -237,10 +260,29 @@ index 190cc248a..9738f09dd 100644
 +        if (mPreviewRecorder != null || mCameraDevice == null) {
 +            return;
 +        }
++        // Keep the recorded (== preview) size small: the software H.264 encoder
++        // cannot keep up with 1024x576/720p, which made the preview stutter and
++        // the encoded track drift away from the audio.
++        Camera.Size current = mParameters.getPreviewSize();
++        if (current != null && current.width * current.height > 640 * 480) {
++            Camera.Size best = null;
++            for (Camera.Size size : mParameters.getSupportedPreviewSizes()) {
++                if (size.width * size.height <= 640 * 480
++                        && (best == null || size.width * size.height
++                                > best.width * best.height)) {
++                    best = size;
++                }
++            }
++            if (best != null) {
++                mParameters.setPreviewSize(best.width, best.height);
++                mCameraDevice.setParameters(mParameters);
++                Log.i(TAG, "recording preview lowered to " + best.width + "x" + best.height);
++            }
++        }
 +        Camera.Size previewSize = mParameters.getPreviewSize();
 +        int width = previewSize != null ? previewSize.width : mProfile.videoFrameWidth;
 +        int height = previewSize != null ? previewSize.height : mProfile.videoFrameHeight;
-+        mVideoTempPath = mVideoFilename + ".video";
++        mVideoTempPath = new File(mActivity.getCacheDir(), "recording.mp4.video").getAbsolutePath();
 +        mPreviewRecorder = new PreviewVideoRecorder();
 +        mPreviewRecorder.setAudioEnabled(false);
 +        try {
@@ -296,26 +338,53 @@ index 190cc248a..9738f09dd 100644
 +            Log.w(TAG, "nothing to merge (video=" + videoPath + ", audio=" + audioPath + ")");
 +            return;
 +        }
-+        String mergedPath = audioPath + ".merged";
++        String mergedPath = new File(mActivity.getCacheDir(), "recording.merged.mp4")
++                .getAbsolutePath();
 +        if (PreviewVideoRecorder.remux(videoPath, audioPath, mergedPath,
 +                mMediaRecorderRotationHint)) {
-+            File merged = new File(mergedPath);
-+            File target = new File(audioPath);
-+            if (merged.renameTo(target)) {
-+                new File(videoPath).delete();
-+                Log.i(TAG, "video track merged into " + audioPath);
-+            } else {
-+                Log.e(TAG, "could not rename " + mergedPath);
-+            }
++            publishRecording(mergedPath, audioPath);
++            new File(videoPath).delete();
++            new File(audioPath).delete();
++            new File(mergedPath).delete();
 +        } else {
 +            Log.e(TAG, "could not merge the video track, keeping " + videoPath);
++        }
++    }
++
++    /**
++     * Copies the finished recording into the media directory as a hidden file
++     * first (the media scanner ignores those) and renames it into place, so the
++     * camera directory never contains a half written video.
++     */
++    private void publishRecording(String sourcePath, String finalPath) {
++        File target = new File(finalPath);
++        File hidden = new File(target.getParentFile(), "." + target.getName() + ".part");
++        try {
++            FileInputStream in = new FileInputStream(sourcePath);
++            FileOutputStream out = new FileOutputStream(hidden);
++            byte[] buffer = new byte[256 * 1024];
++            int read;
++            while ((read = in.read(buffer)) > 0) {
++                out.write(buffer, 0, read);
++            }
++            out.getFD().sync();
++            out.close();
++            in.close();
++            if (hidden.renameTo(target)) {
++                Log.i(TAG, "recording published to " + finalPath);
++            } else {
++                Log.e(TAG, "could not rename " + hidden + " to " + finalPath);
++            }
++        } catch (IOException e) {
++            Log.e(TAG, "could not publish the recording", e);
++            hidden.delete();
 +        }
 +    }
 +
      private boolean stopVideoRecording() {
          Log.v(TAG, "stopVideoRecording");
          mStopRecPending = true;
-@@ -2238,6 +2429,36 @@ public class VideoModule implements CameraModule,
+@@ -2238,6 +2482,36 @@ public class VideoModule implements CameraModule,
                  fail = true;
              }
              mMediaRecorderRecording = false;
@@ -352,7 +421,7 @@ index 190cc248a..9738f09dd 100644
  
              //If recording stops while snapshot is in progress, we might not get jpeg callback
              //because cameraservice will disable picture related messages. Hence reset the
-@@ -2261,9 +2482,7 @@ public class VideoModule implements CameraModule,
+@@ -2261,9 +2535,7 @@ public class VideoModule implements CameraModule,
              mUI.setOrientationIndicator(0, true);
              keepScreenOnAwhile();
              if (shouldAddToMediaStoreNow && !fail) {
