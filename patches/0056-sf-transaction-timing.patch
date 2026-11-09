@@ -1,0 +1,15 @@
+diff --git a/services/surfaceflinger/SurfaceFlinger.cpp b/services/surfaceflinger/SurfaceFlinger.cpp
+index f513b9fd7..a198036f9 100644
+--- a/services/surfaceflinger/SurfaceFlinger.cpp
++++ b/services/surfaceflinger/SurfaceFlinger.cpp
+@@ -2286,6 +2286,10 @@ void SurfaceFlinger::handleTransaction(uint32_t transactionFlags)
+     handleTransactionLocked(transactionFlags);
+ 
+     mLastTransactionTime = systemTime() - now;
++    if (mLastTransactionTime > ms2ns(100)) {
++        ALOGW("pisces: transaction took %" PRId64 " ms (flags 0x%x)",
++                ns2ms(mLastTransactionTime), transactionFlags);
++    }
+     mDebugInTransaction = 0;
+     invalidateHwcGeometry();
+     // here the transaction has been committed
