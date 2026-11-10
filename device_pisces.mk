@@ -27,8 +27,6 @@ PRODUCT_COPY_FILES += \
     frameworks/native/data/etc/android.hardware.camera.xml:system/etc/permissions/android.hardware.camera.xml \
     frameworks/native/data/etc/android.hardware.ethernet.xml:system/etc/permissions/android.hardware.ethernet.xml \
     frameworks/native/data/etc/android.hardware.location.gps.xml:system/etc/permissions/android.hardware.location.gps.xml \
-    frameworks/native/data/etc/android.hardware.nfc.hce.xml:system/etc/permissions/android.hardware.nfc.hce.xml \
-    frameworks/native/data/etc/android.hardware.nfc.xml:system/etc/permissions/android.hardware.nfc.xml \
     frameworks/native/data/etc/android.hardware.sensor.accelerometer.xml:system/etc/permissions/android.hardware.sensor.accelerometer.xml \
     frameworks/native/data/etc/android.hardware.sensor.barometer.xml:system/etc/permissions/android.hardware.sensor.barometer.xml \
     frameworks/native/data/etc/android.hardware.sensor.compass.xml:system/etc/permissions/android.hardware.sensor.compass.xml \
@@ -49,6 +47,7 @@ PRODUCT_COPY_FILES += \
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/permissions/com.broadcom.bt.xml:system/etc/permissions/com.broadcom.bt.xml \
     $(LOCAL_PATH)/permissions/com.broadcom.nfc.xml:system/etc/permissions/com.broadcom.nfc.xml \
+    $(LOCAL_PATH)/nfc/libnfc-nci.conf:system/etc/libnfc-nci.conf \
     $(LOCAL_PATH)/permissions/com.nvidia.graphics.xml:system/etc/permissions/com.nvidia.graphics.xml \
     $(LOCAL_PATH)/permissions/com.nvidia.miracast.xml:system/etc/permissions/com.nvidia.miracast.xml \
     $(LOCAL_PATH)/permissions/com.nvidia.nvsi.xml:system/etc/permissions/com.nvidia.nvsi.xml \
@@ -185,13 +184,16 @@ PRODUCT_PACKAGES += \
     libnetcmdiface  \
     e2fsck
 
-# NFC
-PRODUCT_PACKAGES += \
-    nfc_nci.bcm2079x.default \
-    NfcNci \
-    Tag \
-    com.android.nfc_extras \
-    SmartcardService
+# NFC: intentionally not built.  Android 9 expects android.hardware.nfc@1.1
+# (HIDL) but this device only ships the 2013 legacy nfc_nci HAL, so NfcNci
+# aborts during startup (config ok, then getService() returns null).  The old
+# HAL library and the /dev/bcm2079x node stay in place so a HIDL wrapper can be
+# added later without touching the vendor blobs again.
+#PRODUCT_PACKAGES += \
+#    nfc_nci.bcm2079x.default \
+#    NfcNci \
+#    Tag \
+#    com.android.nfc_extras
 
 # USB
 PRODUCT_PACKAGES += \
