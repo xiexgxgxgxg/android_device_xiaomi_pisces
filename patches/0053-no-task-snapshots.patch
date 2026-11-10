@@ -1,5 +1,5 @@
 diff --git a/services/core/java/com/android/server/wm/TaskSnapshotController.java b/services/core/java/com/android/server/wm/TaskSnapshotController.java
-index 733a2486215..5b98a8cab30 100644
+index 733a2486215..7fac3503b3f 100644
 --- a/services/core/java/com/android/server/wm/TaskSnapshotController.java
 +++ b/services/core/java/com/android/server/wm/TaskSnapshotController.java
 @@ -165,7 +165,19 @@ class TaskSnapshotController {
@@ -12,7 +12,7 @@ index 733a2486215..5b98a8cab30 100644
 +    // it until the watchdog kills system_server.  Skip the capture and let the
 +    // recents UI fall back to the app icon.
 +    private static boolean piscesSkipSnapshots() {
-+        return android.os.SystemProperties.getBoolean("persist.pisces.no_task_snapshots", true);
++        return android.os.SystemProperties.getBoolean("persist.pisces.no_task_snapshots", false);
 +    }
 +
      void snapshotTasks(ArraySet<Task> tasks) {
