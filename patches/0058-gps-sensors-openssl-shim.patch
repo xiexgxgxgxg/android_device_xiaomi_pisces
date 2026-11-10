@@ -1,0 +1,14 @@
+diff --git a/libs/gui/Android.bp b/libs/gui/Android.bp
+index e4da22f8d..d71c33a5a 100644
+--- a/libs/gui/Android.bp
++++ b/libs/gui/Android.bp
+@@ -184,7 +184,8 @@ cc_library_shared {
+     vndk: {
+         enabled: true,
+     },
+-    defaults: ["libgui_defaults"]
++    defaults: ["libgui_defaults"],
++    srcs: ["pisces_sensors_compat.cpp"],
+ }
+ 
+ cc_library_shared {
