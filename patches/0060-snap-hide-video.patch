@@ -1,0 +1,569 @@
+diff --git a/src/com/android/camera/CameraActivity.java b/src/com/android/camera/CameraActivity.java
+index 31edc9a5a..759826fb8 100755
+--- a/src/com/android/camera/CameraActivity.java
++++ b/src/com/android/camera/CameraActivity.java
+@@ -1554,7 +1554,9 @@ public class CameraActivity extends Activity
+         int moduleIndex = -1;
+         if (MediaStore.INTENT_ACTION_VIDEO_CAMERA.equals(getIntent().getAction())
+                 || MediaStore.ACTION_VIDEO_CAPTURE.equals(getIntent().getAction())) {
+-            moduleIndex = ModuleSwitcher.VIDEO_MODULE_INDEX;
++            /* pisces: video recording is hidden, open the photo module instead so
++             * those intents do not crash on a missing module. */
++            moduleIndex = ModuleSwitcher.PHOTO_MODULE_INDEX;
+         } else if (MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA.equals(getIntent().getAction())
+                 || MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA_SECURE.equals(getIntent()
+                 .getAction())) {
+diff --git a/src/com/android/camera/VideoModule.java b/src/com/android/camera/VideoModule.java
+index 190cc248a..837d9e2b6 100644
+--- a/src/com/android/camera/VideoModule.java
++++ b/src/com/android/camera/VideoModule.java
+@@ -17,6 +17,8 @@
+ 
+ package com.android.camera;
+ 
++import android.graphics.Canvas;
++import android.graphics.Rect;
+ import android.annotation.TargetApi;
+ import android.app.Activity;
+ import android.content.ActivityNotFoundException;
+@@ -42,6 +44,7 @@ import android.media.MediaRecorder;
+ import android.media.MediaMetadataRetriever;
+ import android.net.Uri;
+ import android.os.Build;
++import android.os.HandlerThread;
+ import android.os.Bundle;
+ import android.os.Handler;
+ import android.os.Message;
+@@ -54,6 +57,7 @@ import android.provider.MediaStore.Video;
+ import android.util.Log;
+ import android.view.KeyEvent;
+ import android.view.OrientationEventListener;
++import android.view.Surface;
+ import android.view.SurfaceHolder;
+ import android.view.View;
+ import android.view.WindowManager;
+@@ -79,6 +83,8 @@ import org.codeaurora.snapcam.wrapper.ParametersWrapper;
+ import org.codeaurora.snapcam.wrapper.CamcorderProfileWrapper;
+ 
+ import java.io.File;
++import java.io.FileInputStream;
++import java.io.FileOutputStream;
+ import java.io.IOException;
+ import java.text.SimpleDateFormat;
+ import java.util.Date;
+@@ -97,6 +103,17 @@ public class VideoModule implements CameraModule,
+     MediaRecorder.OnErrorListener,
+     MediaRecorder.OnInfoListener {
+ 
++    private PreviewVideoRecorder mPreviewRecorder;
++    private PreviewVideoRecorder mAudioRecorder;
++    private String mAudioTempPath;
++    private String mAudioMergePath;
++    private HandlerThread mRecorderThread;
++    private Handler mRecorderHandler;
++    private byte[] mRecorderBuffer;
++    private String mVideoTempPath;
++    private String mAudioPath;
++    private int mMediaRecorderRotationHint;
++
+     private static final String TAG = "CAM_VideoModule";
+ 
+     private static final int CHECK_DISPLAY_ROTATION = 3;
+@@ -1185,6 +1202,23 @@ public class VideoModule implements CameraModule,
+             mDesiredPreviewWidth = optimalSize.width;
+             mDesiredPreviewHeight = optimalSize.height;
+         }
++        // pisces: the video track is encoded from the preview frames on the CPU,
++        // so keep the preview (and the recording) small enough to stay smooth.
++        if (mDesiredPreviewWidth * mDesiredPreviewHeight > 640 * 480) {
++            Size best = null;
++            for (Size size : mParameters.getSupportedPreviewSizes()) {
++                if (size.width * size.height <= 640 * 480
++                        && (best == null || size.width * size.height
++                                > best.width * best.height)) {
++                    best = size;
++                }
++            }
++            if (best != null) {
++                mDesiredPreviewWidth = best.width;
++                mDesiredPreviewHeight = best.height;
++                Log.i(TAG, "video preview capped to " + best.width + "x" + best.height);
++            }
++        }
+         mUI.setPreviewSize(mDesiredPreviewWidth, mDesiredPreviewHeight);
+         Log.v(TAG, "mDesiredPreviewWidth=" + mDesiredPreviewWidth +
+                 ". mDesiredPreviewHeight=" + mDesiredPreviewHeight);
+@@ -1631,6 +1665,80 @@ public class VideoModule implements CameraModule,
+         }
+     }
+ 
++    private static class RecorderSurfaceHolder implements SurfaceHolder {
++        private final Surface mSurface;
++
++        RecorderSurfaceHolder(Surface surface) {
++            mSurface = surface;
++        }
++
++        @Override
++        public Surface getSurface() {
++            return mSurface;
++        }
++
++        @Override
++        public void addCallback(Callback callback) {
++        }
++
++        @Override
++        public void removeCallback(Callback callback) {
++        }
++
++        @Override
++        public boolean isCreating() {
++            return false;
++        }
++
++        @Override
++        public void setType(int type) {
++        }
++
++        @Override
++        public void setFixedSize(int width, int height) {
++        }
++
++        @Override
++        public void setSizeFromLayout() {
++        }
++
++        @Override
++        public void setFormat(int format) {
++        }
++
++        @Override
++        public void setKeepScreenOn(boolean screenOn) {
++        }
++
++        @Override
++        public Canvas lockCanvas() {
++            return null;
++        }
++
++        @Override
++        public Canvas lockCanvas(Rect dirty) {
++            return null;
++        }
++
++        @Override
++        public void unlockCanvasAndPost(Canvas canvas) {
++        }
++
++        @Override
++        public Rect getSurfaceFrame() {
++            return null;
++        }
++    }
++
++    private void setupCameraForRecorderSurface(Surface surface) {
++        stopPreview();
++        mCameraDevice.setPreviewDisplay(new RecorderSurfaceHolder(surface));
++        mCameraDevice.setDisplayOrientation(
++                CameraUtil.getDisplayOrientation(mDisplayRotation, mCameraId));
++        mCameraDevice.startPreview();
++        mPreviewing = true;
++    }
++
+     private void setupMediaRecorderPreviewDisplay() {
+         mFocusManager.resetTouchFocus();
+         // Nothing to do here if using SurfaceTexture.
+@@ -1669,8 +1777,21 @@ public class VideoModule implements CameraModule,
+     }
+ 
+     // Prepares media recorder.
++    /** pisces: the audio capture chain on this device leaks in mediaserver. */
++    private boolean noAudioRecording() {
++        return android.os.SystemProperties.getBoolean("persist.pisces.video_noaudio", true);
++    }
++
+     private void initializeRecorder() {
+         Log.v(TAG, "initializeRecorder");
++        if (noAudioRecording() && mVideoFileDescriptor == null) {
++            // Record the video track only: MediaRecorder + the audio HAL were
++            // leaking ~200 MB in mediaserver and eventually got the app killed
++            // by the low memory killer.
++            generateVideoFilename(mProfile.fileFormat);
++            mMediaRecorder = null;
++            return;
++        }
+         // If the mCameraDevice is null, then this activity is going to finish
+         if (mCameraDevice == null) return;
+ 
+@@ -1733,9 +1854,8 @@ public class VideoModule implements CameraModule,
+         }
+         mMediaRecorder = new MediaRecorder();
+ 
+-        // Unlock the camera object before passing it to media recorder.
+-        mCameraDevice.unlock();
+-        mMediaRecorder.setCamera(mCameraDevice.getCamera());
++        // pisces: record through the recorder surface - the camera1 service has
++        // no working setPreviewCallbackTarget() and the HAL has only one output.
+ 
+         String hfr = ParametersWrapper.getVideoHighFrameRate(mParameters);
+         String hsr =  mParameters.get(CameraSettings.KEY_VIDEO_HSR);
+@@ -1752,7 +1872,6 @@ public class VideoModule implements CameraModule,
+             Log.e(TAG, "Invalid hfr(" + hfr + ") or hsr(" + hsr + ")");
+         }
+ 
+-        mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.CAMERA);
+ 
+         mProfile.videoCodec = mVideoEncoder;
+         mProfile.audioCodec = mAudioEncoder;
+@@ -1781,14 +1900,17 @@ public class VideoModule implements CameraModule,
+                 mMediaRecorder.setAudioEncoder(mProfile.audioCodec);
+             }
+         } else {
+-            if (!mCaptureTimeLapse) {
+-                mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.CAMCORDER);
+-            }
+-
+-            mMediaRecorder.setProfile(mProfile);
++            // pisces: MediaRecorder records only the audio track; the video is
++            // encoded from the camera preview frames (PreviewVideoRecorder) so
++            // the viewfinder keeps running, and the two are merged on stop.
++            mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.CAMCORDER);
++            mMediaRecorder.setOutputFormat(mProfile.fileFormat);
++            mMediaRecorder.setAudioSamplingRate(8000);
++            mMediaRecorder.setAudioEncodingBitRate(96000);
++            mMediaRecorder.setAudioChannels(1);
++            mMediaRecorder.setAudioEncoder(mProfile.audioCodec);
+         }
+ 
+-        mMediaRecorder.setVideoSize(mProfile.videoFrameWidth, mProfile.videoFrameHeight);
+         mMediaRecorder.setMaxDuration(mMaxVideoDurationInMs);
+         if (mCaptureTimeLapse) {
+             double fps = 1000 / (double) mTimeBetweenTimeLapseFrameCaptureMs;
+@@ -1825,7 +1947,11 @@ public class VideoModule implements CameraModule,
+             mMediaRecorder.setOutputFile(mVideoFileDescriptor.getFileDescriptor());
+         } else {
+             generateVideoFilename(mProfile.fileFormat);
+-            mMediaRecorder.setOutputFile(mVideoFilename);
++            // pisces: the recorder writes the audio into the app cache so the
++            // media scanner never picks up a half finished file (the gallery
++            // used to crash when it decoded one while the merge was running).
++            mAudioPath = new File(mActivity.getCacheDir(), "recording.mp4").getAbsolutePath();
++            mMediaRecorder.setOutputFile(mAudioPath);
+         }
+ 
+         // Set maximum file size.
+@@ -1853,15 +1979,18 @@ public class VideoModule implements CameraModule,
+         // what activity.getWindowManager().getDefaultDisplay().getRotation() would return,
+         // which is the orientation the graphics need to rotate in order to render correctly.
+         int rotation = 0;
+-        if (mOrientation != OrientationEventListener.ORIENTATION_UNKNOWN) {
+-            CameraHolder.CameraInfo info = CameraHolder.instance().getCameraInfo()[mCameraId];
+-            if (info.facing == CameraHolder.CameraInfo.CAMERA_FACING_FRONT) {
+-                rotation = (info.orientation - mOrientation - mOrientationOffset + 360) % 360;
+-            } else {  // back-facing camera
+-                rotation = (info.orientation + mOrientation + mOrientationOffset) % 360;
+-            }
++        CameraHolder.CameraInfo info = CameraHolder.instance().getCameraInfo()[mCameraId];
++        int deviceOrientation = mOrientation;
++        if (deviceOrientation == OrientationEventListener.ORIENTATION_UNKNOWN) {
++            deviceOrientation = (mDisplayRotation * 90) % 360;
++        }
++        if (info.facing == CameraHolder.CameraInfo.CAMERA_FACING_FRONT) {
++            rotation = (info.orientation - deviceOrientation - mOrientationOffset + 360) % 360;
++        } else {
++            rotation = (info.orientation + deviceOrientation + mOrientationOffset) % 360;
+         }
+         mMediaRecorder.setOrientationHint(rotation);
++        mMediaRecorderRotationHint = rotation;
+         setupMediaRecorderPreviewDisplay();
+ 
+         try {
+@@ -2096,7 +2225,7 @@ public class VideoModule implements CameraModule,
+               mStartRecPending = false;
+               return false;
+         }
+-        if (mMediaRecorder == null) {
++        if (mMediaRecorder == null && !noAudioRecording()) {
+             Log.e(TAG, "Fail to initialize media recorder");
+             mStartRecPending = false;
+             return false;
+@@ -2105,7 +2234,9 @@ public class VideoModule implements CameraModule,
+         requestAudioFocus();
+ 
+         try {
+-            mMediaRecorder.start(); // Recording is now started
++            if (mMediaRecorder != null) {
++                mMediaRecorder.start(); // Recording is now started
++            }
+         } catch (RuntimeException e) {
+             Toast.makeText(mActivity,"Could not start media recorder.\n Can't start video recording.", Toast.LENGTH_LONG).show();
+             releaseMediaRecorder();
+@@ -2116,6 +2247,8 @@ public class VideoModule implements CameraModule,
+             return false;
+         }
+ 
++        startPreviewVideoRecorder();
++
+         mUI.hideUIwhileRecording();
+ 
+         // Make sure the video recording has started before announcing
+@@ -2210,6 +2343,167 @@ public class VideoModule implements CameraModule,
+         }
+     }
+ 
++    /** Encodes the camera preview frames into a video-only file. */
++    private void startPreviewVideoRecorder() {
++        if (mPreviewRecorder != null || mCameraDevice == null) {
++            return;
++        }
++        // Keep the recorded (== preview) size small: the software H.264 encoder
++        // cannot keep up with 1024x576/720p, which made the preview stutter and
++        // the encoded track drift away from the audio.
++        Camera.Size current = mParameters.getPreviewSize();
++        if (current != null && current.width * current.height > 640 * 480) {
++            Camera.Size best = null;
++            for (Camera.Size size : mParameters.getSupportedPreviewSizes()) {
++                if (size.width * size.height <= 640 * 480
++                        && (best == null || size.width * size.height
++                                > best.width * best.height)) {
++                    best = size;
++                }
++            }
++            if (best != null) {
++                // Do not push new parameters while the preview is running: on
++                // this HAL that left the preview callback with black frames.
++                // getDesiredPreviewSize() asks for a 480p preview up front
++                // instead.
++                Log.i(TAG, "recording will use the preview size directly");
++            }
++        }
++        Camera.Size previewSize = mParameters.getPreviewSize();
++        int width = previewSize != null ? previewSize.width : mProfile.videoFrameWidth;
++        int height = previewSize != null ? previewSize.height : mProfile.videoFrameHeight;
++        mVideoTempPath = new File(mActivity.getCacheDir(), "recording.mp4.video").getAbsolutePath();
++        mPreviewRecorder = new PreviewVideoRecorder();
++        mPreviewRecorder.setAudioEnabled(false);
++        try {
++            int bitRate = Math.min(mProfile.videoBitRate, width * height * 4);
++            mPreviewRecorder.start(width, height, mProfile.videoFrameRate,
++                    bitRate, mVideoTempPath, mMediaRecorderRotationHint);
++        } catch (Exception e) {
++            Log.e(TAG, "cannot start the preview recorder", e);
++            mPreviewRecorder = null;
++            mVideoTempPath = null;
++            return;
++        }
++        mRecorderThread = new HandlerThread("VideoRecorder");
++        mRecorderThread.start();
++        mRecorderHandler = new Handler(mRecorderThread.getLooper());
++        mRecorderBuffer = new byte[width * height * 3 / 2];
++        mCameraDevice.addCallbackBuffer(mRecorderBuffer);
++        mCameraDevice.setPreviewDataCallbackWithBuffer(mRecorderHandler,
++                new CameraManager.CameraPreviewDataCallback() {
++                    @Override
++                    public void onPreviewFrame(byte[] data, CameraManager.CameraProxy camera) {
++                        PreviewVideoRecorder recorder = mPreviewRecorder;
++                        if (recorder != null) {
++                            recorder.offerFrame(data);
++                        }
++                        if (mCameraDevice != null) {
++                            mCameraDevice.addCallbackBuffer(data);
++                        }
++                    }
++                });
++        Log.i(TAG, "preview video recorder started at " + width + "x" + height);
++    }
++
++    /** Stops the video recorder and merges its track with the audio file. */
++    private void stopPreviewVideoRecorder(String audioPath) {
++        if (mCameraDevice != null && mRecorderHandler != null) {
++            mCameraDevice.setPreviewDataCallbackWithBuffer(mRecorderHandler, null);
++        }
++        PreviewVideoRecorder recorder = mPreviewRecorder;
++        mPreviewRecorder = null;
++        long t0 = System.currentTimeMillis();
++        long recordedDurationUs = recorder != null ? recorder.getRecordedDurationUs() : 0;
++        if (recorder != null) {
++            recorder.stop();
++        }
++        Log.i(TAG, "video encoder stopped in " + (System.currentTimeMillis() - t0) + " ms");
++        if (mRecorderThread != null) {
++            mRecorderThread.quitSafely();
++            mRecorderThread = null;
++            mRecorderHandler = null;
++        }
++        mRecorderBuffer = null;
++        String videoPath = mVideoTempPath;
++        mVideoTempPath = null;
++        if (videoPath == null || audioPath == null) {
++            Log.w(TAG, "nothing to merge (video=" + videoPath + ", audio=" + audioPath + ")");
++            return;
++        }
++        String mergedPath = new File(mActivity.getCacheDir(), "recording.merged.mp4")
++                .getAbsolutePath();
++        long t1 = System.currentTimeMillis();
++        // In the no-audio mode there is no recorder file: give the video a
++        // silent track, otherwise the gallery's player only shows a black frame.
++        String audioSource = audioPath;
++        if (!new File(audioSource).exists()) {
++            long durationUs = recordedDurationUs;
++            File silence = new File(mActivity.getCacheDir(), "silence.m4a");
++            if (durationUs > 0
++                    && PreviewVideoRecorder.makeSilentAudio(silence.getAbsolutePath(), durationUs)) {
++                audioSource = silence.getAbsolutePath();
++                Log.i(TAG, "added a " + durationUs / 1000 + " ms silent track");
++            }
++        }
++        boolean merged = PreviewVideoRecorder.remux(videoPath, audioSource, mergedPath,
++                mMediaRecorderRotationHint);
++        Log.i(TAG, "remux took " + (System.currentTimeMillis() - t1) + " ms (ok=" + merged + ")");
++        if (merged) {
++            long t2 = System.currentTimeMillis();
++            publishRecording(mergedPath, audioPath);
++            Log.i(TAG, "publish took " + (System.currentTimeMillis() - t2) + " ms");
++            new File(videoPath).delete();
++            if (mAudioPath != null) {
++                new File(mAudioPath).delete();   // the recorder's temp audio
++                mAudioPath = null;
++            }
++            new File(mergedPath).delete();
++        } else {
++            // No usable audio: publish the video only file rather than losing
++            // the whole recording.
++            Log.w(TAG, "could not merge the audio, publishing the video track only");
++            publishRecording(videoPath, audioPath);
++            new File(videoPath).delete();
++            if (mAudioPath != null) {
++                new File(mAudioPath).delete();
++                mAudioPath = null;
++            }
++        }
++    }
++
++    /**
++     * Copies the finished recording into the media directory as a hidden file
++     * first (the media scanner ignores those) and renames it into place, so the
++     * camera directory never contains a half written video.
++     */
++    private void publishRecording(String sourcePath, String finalPath) {
++        File target = new File(finalPath);
++        File hidden = new File(target.getParentFile(), "." + target.getName() + ".part");
++        try {
++            if (!PreviewVideoRecorder.faststartPublish(sourcePath, hidden.getAbsolutePath())) {
++                FileInputStream in = new FileInputStream(sourcePath);
++                FileOutputStream out = new FileOutputStream(hidden);
++                byte[] buffer = new byte[256 * 1024];
++                int read;
++                while ((read = in.read(buffer)) > 0) {
++                    out.write(buffer, 0, read);
++                }
++                out.getFD().sync();
++                out.close();
++                in.close();
++            }
++            if (hidden.renameTo(target)) {
++                Log.i(TAG, "recording published to " + finalPath);
++            } else {
++                Log.e(TAG, "could not rename " + hidden + " to " + finalPath);
++            }
++        } catch (IOException e) {
++            Log.e(TAG, "could not publish the recording", e);
++            hidden.delete();
++        }
++    }
++
+     private boolean stopVideoRecording() {
+         Log.v(TAG, "stopVideoRecording");
+         mStopRecPending = true;
+@@ -2238,6 +2532,55 @@ public class VideoModule implements CameraModule,
+                 fail = true;
+             }
+             mMediaRecorderRecording = false;
++            final MediaRecorder recorderToStop = mMediaRecorder;
++            mMediaRecorder = null;   // the background thread owns it from here
++            final String audioPath = mVideoFilename;
++            final boolean addToMediaStore = shouldAddToMediaStoreNow && !fail;
++            new Thread("VideoFinalise") {
++                @Override
++                public void run() {
++                    if (recorderToStop != null) {
++                        // The audio HAL on this device can take forever to stop,
++                        // which used to block the whole finalisation (and the
++                        // system watchdog eventually killed system_server).
++                        Thread audioStop = new Thread("VideoAudioStop") {
++                            @Override
++                            public void run() {
++                                try {
++                                    recorderToStop.stop();
++                                } catch (RuntimeException e) {
++                                    Log.w(TAG, "MediaRecorder.stop failed", e);
++                                }
++                            }
++                        };
++                        audioStop.start();
++                        try {
++                            audioStop.join(6000);
++                        } catch (InterruptedException e) {
++                            Thread.currentThread().interrupt();
++                        }
++                        if (audioStop.isAlive()) {
++                            Log.w(TAG, "MediaRecorder.stop is stuck, carrying on");
++                        }
++                        try {
++                            recorderToStop.reset();
++                            recorderToStop.release();
++                        } catch (RuntimeException ignored) {
++                        }
++                    }
++                    Log.i(TAG, "finalise: audio recorder done at " + System.currentTimeMillis());
++                    stopPreviewVideoRecorder(audioPath);
++                    Log.i(TAG, "finalise: video track handled at " + System.currentTimeMillis());
++                    if (addToMediaStore) {
++                        mHandler.post(new Runnable() {
++                            @Override
++                            public void run() {
++                                saveVideo();
++                            }
++                        });
++                    }
++                }
++            }.start();
+ 
+             //If recording stops while snapshot is in progress, we might not get jpeg callback
+             //because cameraservice will disable picture related messages. Hence reset the
+@@ -2261,9 +2604,7 @@ public class VideoModule implements CameraModule,
+             mUI.setOrientationIndicator(0, true);
+             keepScreenOnAwhile();
+             if (shouldAddToMediaStoreNow && !fail) {
+-                if (mVideoFileDescriptor == null) {
+-                    saveVideo();
+-                } else if (mIsVideoCaptureIntent) {
++                if (mVideoFileDescriptor != null && mIsVideoCaptureIntent) {
+                     // if no file save is needed, we can show the post capture UI now
+                     showCaptureResult();
+                 }
+diff --git a/src/com/android/camera/ui/ModuleSwitcher.java b/src/com/android/camera/ui/ModuleSwitcher.java
+index 058e64d7b..1ada77fa5 100644
+--- a/src/com/android/camera/ui/ModuleSwitcher.java
++++ b/src/com/android/camera/ui/ModuleSwitcher.java
+@@ -115,6 +115,9 @@ public class ModuleSwitcher extends RotateImageView
+             --numDrawIds;
+         }
+ 
++        // pisces: video recording is hidden until the audio path works.
++        --numDrawIds;
++
+         // Always decrement one because of GCam.
+         --numDrawIds;
+ 
+@@ -128,6 +131,9 @@ public class ModuleSwitcher extends RotateImageView
+             if (i == GCAM_MODULE_INDEX) {
+                 continue; // don't add to UI
+             }
++            if (i == VIDEO_MODULE_INDEX) {
++                continue; // pisces: video recording hidden
++            }
+             moduleids[ix] = i;
+             drawids[ix++] = DRAW_IDS[i];
+         }
