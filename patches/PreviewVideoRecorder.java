@@ -67,10 +67,12 @@ public class PreviewVideoRecorder {
     private byte[] mConvert;
     private int mColorFormat;
     private boolean mUseFlexibleImage;
-    private android.media.Image mFlexibleImage;
     private byte[] mAudioBuffer;
     private int mVideoFrames;
     private long mStartTimeUs;
+    private long mMinFrameIntervalUs;
+    private long mLastFrameUs;
+    private int mDebugFrames;
     private int mDroppedFrames;
 
     /** Thrown when the encoder cannot be set up. */
@@ -78,6 +80,11 @@ public class PreviewVideoRecorder {
         public RecorderException(String message) {
             super(message);
         }
+    }
+
+    /** Duration of the recorded track, used to size the silent audio track. */
+    public long getRecordedDurationUs() {
+        return mLastFrameUs > mStartTimeUs ? mLastFrameUs - mStartTimeUs : 0;
     }
 
     public void setVideoEnabled(boolean enabled) {
@@ -134,7 +141,9 @@ public class PreviewVideoRecorder {
 
             mColorFormat = colorFormat;
             mConvert = new byte[width * height * 3 / 2];
-            mUseFlexibleImage = colorFormat == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible;
+            // The Image based path produced black frames on this codec (it keeps
+            // using its own buffers), so write the raw NV12 planes instead.
+            mUseFlexibleImage = false && colorFormat == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible;
         } catch (Exception e) {
             Log.e(TAG, "cannot start the encoders", e);
             release();
@@ -289,6 +298,24 @@ public class PreviewVideoRecorder {
         if (mReleased || mStopping || mVideoEncoder == null || !mVideoEnabled) {
             return;
         }
+        long nowUs = System.nanoTime() / 1000;
+        if (mMinFrameIntervalUs > 0 && mLastFrameUs != 0
+                && nowUs - mLastFrameUs < mMinFrameIntervalUs) {
+            mDroppedFrames++;
+            return;
+        }
+        mLastFrameUs = nowUs;
+        if (mDebugFrames < 3) {
+            mDebugFrames++;
+            long sum = 0;
+            int count = Math.min(nv21.length, mWidth * mHeight);
+            for (int i = 0; i < count; i += 97) {
+                sum += nv21[i] & 0xff;
+            }
+            long avg = count > 0 ? sum / (count / 97 + 1) : 0;
+            Log.i(TAG, "frame " + mDebugFrames + ": luma average " + avg
+                    + " size " + nv21.length + " (w=" + mWidth + " h=" + mHeight + ")");
+        }
         if (nv21.length < mConvert.length) {
             mDroppedFrames++;
             return;
@@ -312,15 +339,6 @@ public class PreviewVideoRecorder {
                 mConvert[uIndex + i] = uvSwap ? first : second;
                 mConvert[vIndex + i] = uvSwap ? second : first;
             }
-        } else if (mColorFormat == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible
-                && mFlexibleImage != null) {
-            // The encoder chose COLOR_FormatYUV420Flexible: its buffers follow the
-            // Image strides, which do not have to be tight.  Write the planes
-            // through getInputImage() so the chroma lands where the codec expects
-            // it (otherwise the video loses its colours).
-            copyPlane(mFlexibleImage.getPlanes()[0], nv21, 0, 1);
-            copyPlane(mFlexibleImage.getPlanes()[1], nv21, ySize + 1, 2);
-            copyPlane(mFlexibleImage.getPlanes()[2], nv21, ySize, 2);
         } else {
             for (int i = ySize; i + 1 < mConvert.length; i += 2) {
                 if (uvSwap) {
@@ -342,21 +360,120 @@ public class PreviewVideoRecorder {
             if (buffer == null) {
                 return;
             }
-            if (mUseFlexibleImage) {
-                mFlexibleImage = mVideoEncoder.getInputImage(index);
-            }
-            buffer.clear();
-            if (!mUseFlexibleImage || mFlexibleImage == null) {
-                buffer.put(mConvert, 0, mConvert.length);
-            }
             // Presentation times must be relative to the start of the recording:
             // absolute values made the merged file report a bogus duration.
             long ptsUs = System.nanoTime() / 1000 - mStartTimeUs;
+            android.media.Image image = mUseFlexibleImage
+                    ? mVideoEncoder.getInputImage(index) : null;
+            if (image != null) {
+                // The codec chose a flexible format: its buffers follow the Image
+                // strides, so write the planes through the Image (a flat buffer
+                // copy misplaced the chroma and the video lost its colours).
+                // The Image is only valid until queueInputBuffer(), so it is
+                // fetched fresh for every frame.
+                copyPlane(image.getPlanes()[0], nv21, 0, 1);
+                copyPlane(image.getPlanes()[1], nv21, ySize + 1, 2);
+                copyPlane(image.getPlanes()[2], nv21, ySize, 2);
+            } else {
+                buffer.clear();
+                buffer.put(mConvert, 0, mConvert.length);
+            }
             mVideoEncoder.queueInputBuffer(index, 0, mConvert.length, ptsUs, 0);
             mVideoFrames++;
             drainEncoder(mVideoEncoder, false);
         } catch (IllegalStateException e) {
             Log.w(TAG, "video encoder gone", e);
+        }
+    }
+
+
+    /**
+     * Writes a silent AAC track of the given length.  The gallery's player
+     * refuses to render video-only files (it shows a black first frame), so the
+     * silent recording gets a silent audio track before it is published.
+     */
+    public static boolean makeSilentAudio(String path, long durationUs) {
+        MediaCodec encoder = null;
+        MediaMuxer muxer = null;
+        try {
+            encoder = MediaCodec.createEncoderByType(AUDIO_MIME);
+            MediaFormat format = MediaFormat.createAudioFormat(AUDIO_MIME, AUDIO_SAMPLE_RATE, 1);
+            format.setInteger(MediaFormat.KEY_BIT_RATE, 16000);
+            format.setInteger(MediaFormat.KEY_AAC_PROFILE,
+                    MediaCodecInfo.CodecProfileLevel.AACObjectLC);
+            format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16384);
+            encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+            encoder.start();
+            muxer = new MediaMuxer(path, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
+
+            final int frameSamples = 1024;
+            final long frameUs = 1000000L * frameSamples / AUDIO_SAMPLE_RATE;
+            final byte[] silence = new byte[2048];   // AAC LC silence frame payload
+            long ptsUs = 0;
+            int track = -1;
+            boolean started = false;
+            MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+            long deadline = SystemClock.elapsedRealtime() + 15000;
+            while (SystemClock.elapsedRealtime() < deadline) {
+                if (ptsUs <= durationUs) {
+                    int index = encoder.dequeueInputBuffer(10000);
+                    if (index >= 0) {
+                        ByteBuffer input = encoder.getInputBuffer(index);
+                        if (input != null) {
+                            input.clear();
+                            input.put(silence);
+                            encoder.queueInputBuffer(index, 0, silence.length, ptsUs, 0);
+                        }
+                        ptsUs += frameUs;
+                    }
+                } else {
+                    int index = encoder.dequeueInputBuffer(10000);
+                    if (index >= 0) {
+                        encoder.queueInputBuffer(index, 0, 0, ptsUs,
+                                MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                    }
+                }
+                while (true) {
+                    int outIndex = encoder.dequeueOutputBuffer(info, 0);
+                    if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                        track = muxer.addTrack(encoder.getOutputFormat());
+                        muxer.start();
+                        started = true;
+                    } else if (outIndex >= 0) {
+                        ByteBuffer buffer = encoder.getOutputBuffer(outIndex);
+                        if (buffer != null && info.size > 0 && started && track >= 0) {
+                            buffer.position(info.offset);
+                            buffer.limit(info.offset + info.size);
+                            muxer.writeSampleData(track, buffer, info);
+                        }
+                        encoder.releaseOutputBuffer(outIndex, false);
+                        if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                            return true;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
+            return false;
+        } catch (Exception e) {
+            Log.w(TAG, "could not create the silent audio track", e);
+            return false;
+        } finally {
+            try {
+                if (encoder != null) {
+                    encoder.stop();
+                    encoder.release();
+                }
+            } catch (Exception ignored) {
+            }
+            try {
+                if (muxer != null) {
+                    muxer.stop();
+                    muxer.release();
+                }
+            } catch (Exception ignored) {
+            }
         }
     }
 
@@ -455,6 +572,153 @@ public class PreviewVideoRecorder {
         }
         Log.w(TAG, "encoder did not reach end of stream in 5 s");
     }
+
+
+    /**
+     * Copies an MP4 so that the moov box comes before the mdat, adjusting the
+     * chunk offsets.  Players (and the gallery's thumbnailer) otherwise have to
+     * seek to the end of the file before they can show the first frame, which is
+     * what made long recordings slow to start.
+     */
+    public static boolean faststartPublish(String source, String destination) {
+        java.io.RandomAccessFile in = null;
+        java.io.FileOutputStream out = null;
+        try {
+            in = new java.io.RandomAccessFile(source, "r");
+            long length = in.length();
+            long ftypPos = -1, ftypLen = 0, moovPos = -1, moovLen = 0, mdatPos = -1, mdatLen = 0;
+            long pos = 0;
+            byte[] header = new byte[8];
+            while (pos + 8 <= length) {
+                in.seek(pos);
+                in.readFully(header);
+                long size = readU32(header, 0);
+                String type = new String(header, 4, 4, java.nio.charset.StandardCharsets.ISO_8859_1);
+                long headerSize = 8;
+                if (size == 1) {
+                    byte[] large = new byte[8];
+                    in.readFully(large);
+                    size = ((long) readU32(large, 0) << 32) | readU32(large, 4);
+                    headerSize = 16;
+                } else if (size == 0) {
+                    size = length - pos;
+                }
+                if (size < headerSize) {
+                    return false;
+                }
+                if ("ftyp".equals(type)) {
+                    ftypPos = pos;
+                    ftypLen = size;
+                } else if ("moov".equals(type)) {
+                    moovPos = pos;
+                    moovLen = size;
+                } else if ("mdat".equals(type)) {
+                    mdatPos = pos;
+                    mdatLen = size;
+                }
+                pos += size;
+            }
+            if (moovPos < 0 || mdatPos < 0 || ftypPos < 0 || moovPos < mdatPos) {
+                return false;   // already faststart or not a plain MP4
+            }
+            long newMdat = ftypLen + moovLen;
+            long delta = newMdat - mdatPos;
+
+            byte[] moov = new byte[(int) moovLen];
+            in.seek(moovPos);
+            in.readFully(moov);
+            patchChunkOffsets(moov, 8, (int) moovLen, delta);
+
+            out = new java.io.FileOutputStream(destination);
+            copyRange(in, out, ftypPos, ftypLen);
+            out.write(moov);
+            copyRange(in, out, mdatPos, mdatLen);
+            out.getFD().sync();
+            out.close();
+            out = null;
+            in.close();
+            in = null;
+            Log.i(TAG, "faststart applied (moov before mdat, delta " + delta + ")");
+            return true;
+        } catch (Exception e) {
+            Log.w(TAG, "faststart failed", e);
+            return false;
+        } finally {
+            try {
+                if (in != null) in.close();
+            } catch (Exception ignored) {
+            }
+            try {
+                if (out != null) out.close();
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private static long readU32(byte[] data, int offset) {
+        return ((long) (data[offset] & 0xff) << 24) | ((data[offset + 1] & 0xff) << 16)
+                | ((data[offset + 2] & 0xff) << 8) | (data[offset + 3] & 0xff);
+    }
+
+    private static void writeU32(byte[] data, int offset, long value) {
+        data[offset] = (byte) (value >>> 24);
+        data[offset + 1] = (byte) (value >>> 16);
+        data[offset + 2] = (byte) (value >>> 8);
+        data[offset + 3] = (byte) value;
+    }
+
+    private static void writeU64(byte[] data, int offset, long value) {
+        writeU32(data, offset, value >>> 32);
+        writeU32(data, offset + 4, value & 0xffffffffL);
+    }
+
+    /** Walks the box tree inside [start,end) and shifts stco/co64 entries. */
+    private static void patchChunkOffsets(byte[] box, int start, int end, long delta) {
+        int pos = start;
+        while (pos + 8 <= end) {
+            long size = readU32(box, pos);
+            String type = new String(box, pos + 4, 4, java.nio.charset.StandardCharsets.ISO_8859_1);
+            if (size < 8 || pos + size > end) {
+                return;
+            }
+            int payload = pos + 8;
+            if ("stco".equals(type)) {
+                long count = readU32(box, payload + 4);
+                for (int i = 0; i < count; i++) {
+                    int at = payload + 8 + i * 4;
+                    writeU32(box, at, readU32(box, at) + delta);
+                }
+            } else if ("co64".equals(type)) {
+                long count = readU32(box, payload + 4);
+                for (int i = 0; i < count; i++) {
+                    int at = payload + 8 + i * 8;
+                    long value = (readU32(box, at) << 32) | readU32(box, at + 4);
+                    writeU64(box, at, value + delta);
+                }
+            } else if ("moov".equals(type) || "trak".equals(type) || "mdia".equals(type)
+                    || "minf".equals(type) || "stbl".equals(type)) {
+                patchChunkOffsets(box, payload, (int) (pos + size), delta);
+            }
+            pos += size;
+        }
+    }
+
+    private static void copyRange(java.io.RandomAccessFile in, java.io.FileOutputStream out,
+            long offset, long length) throws java.io.IOException {
+        in.seek(offset);
+        byte[] buffer = new byte[256 * 1024];
+        long remaining = length;
+        while (remaining > 0) {
+            int chunk = (int) Math.min(buffer.length, remaining);
+            int read = in.read(buffer, 0, chunk);
+            if (read <= 0) {
+                break;
+            }
+            out.write(buffer, 0, read);
+            remaining -= read;
+        }
+    }
+
 
     private void maybeStartMuxer() {
         if (!mMuxerStarted && (!mVideoEnabled || mVideoTrack >= 0)

@@ -1,0 +1,63 @@
+diff --git a/graphics/composer/2.1/utils/passthrough/include/composer-passthrough/2.1/HwcLoader.h b/graphics/composer/2.1/utils/passthrough/include/composer-passthrough/2.1/HwcLoader.h
+index 33c914dd..f2106876 100644
+--- a/graphics/composer/2.1/utils/passthrough/include/composer-passthrough/2.1/HwcLoader.h
++++ b/graphics/composer/2.1/utils/passthrough/include/composer-passthrough/2.1/HwcLoader.h
+@@ -28,6 +28,8 @@
+ #include <hardware/gralloc.h>
+ #include <hardware/hardware.h>
+ #include <hardware/hwcomposer.h>
++#include <hardware/fb.h>
++#include <cutils/properties.h>
+ #include <hardware/hwcomposer2.h>
+ #include <hwc2on1adapter/HWC2On1Adapter.h>
+ #include <hwc2onfbadapter/HWC2OnFbAdapter.h>
+@@ -38,6 +40,8 @@ namespace hardware {
+ namespace graphics {
+ namespace composer {
+ namespace V2_1 {
++extern "C" framebuffer_device_t* piscesOpenFbDevice();
++
+ namespace passthrough {
+ 
+ class HwcLoader {
+@@ -58,6 +62,18 @@ class HwcLoader {
+ 
+     // load hwcomposer2 module
+     static const hw_module_t* loadModule() {
++        // pisces: when the framebuffer composer is requested, go straight to the
++        // gralloc module so openDeviceWithAdapter() builds our fb device instead
++        // of loading the crashing vendor hwcomposer.
++        char ownFb[PROPERTY_VALUE_MAX] = {0};
++        property_get("persist.pisces.fb_composer", ownFb, "0");
++        if (ownFb[0] == '1') {
++            const hw_module_t* fbModule;
++            if (hw_get_module(GRALLOC_HARDWARE_MODULE_ID, &fbModule) == 0) {
++                ALOGI("fb composer requested, using the gralloc module");
++                return fbModule;
++            }
++        }
+         const hw_module_t* module;
+         int error = hw_get_module(HWC_HARDWARE_MODULE_ID, &module);
+         if (error) {
+@@ -122,6 +138,21 @@ class HwcLoader {
+ 
+    private:
+     static hwc2_device_t* adaptGrallocModule(const hw_module_t* module) {
++        // pisces: prefer our own framebuffer device.  The vendor gralloc's
++        // framebuffer_device_t does not match what HWC2OnFbAdapter expects and
++        // crashed it, so the framebuffer path (which keeps the vendor HWC out
++        // of the picture entirely) only works with this one.
++        char ownFb[PROPERTY_VALUE_MAX] = {0};
++        property_get("persist.pisces.fb_composer", ownFb, "0");
++        if (ownFb[0] == '1') {
++            framebuffer_device_t* own = piscesOpenFbDevice();
++            if (own != nullptr) {
++                ALOGI("using the pisces framebuffer device");
++                return new HWC2OnFbAdapter(own);
++            }
++            ALOGE("pisces framebuffer device unavailable, falling back");
++        }
++
+         framebuffer_device_t* device;
+         int error = framebuffer_open(module, &device);
+         if (error) {
