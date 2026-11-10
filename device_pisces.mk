@@ -99,7 +99,8 @@ PRODUCT_PROPERTY_OVERRIDES += \
     persist.pisces.gralloc_pidfix=1 \
     persist.pisces.mapper_dedup_free=1 \
     persist.pisces.mapper_snapshot=1 \
-    persist.pisces.mapper_handle_cache=1
+    persist.pisces.mapper_handle_cache=1 \
+    persist.tegra.idle.minimum_fps=0
 
 # ril
 PRODUCT_PROPERTY_OVERRIDES += \
