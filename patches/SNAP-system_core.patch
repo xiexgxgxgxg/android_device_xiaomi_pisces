@@ -1,0 +1,424 @@
+diff --git a/init/init.cpp b/init/init.cpp
+index eb9dd755b..a1d8d72a8 100644
+--- a/init/init.cpp
++++ b/init/init.cpp
+@@ -467,20 +467,21 @@ static void InstallRebootSignalHandlers() {
+     struct sigaction action;
+     memset(&action, 0, sizeof(action));
+     sigfillset(&action.sa_mask);
+-    action.sa_handler = [](int signal) {
+-        // These signal handlers are also caught for processes forked from init, however we do not
+-        // want them to trigger reboot, so we directly call _exit() for children processes here.
++    action.sa_sigaction = [](int signal, siginfo_t* si, void* uc) {
+         if (getpid() != 1) {
+             _exit(signal);
+         }
+-
+-        // Calling DoReboot() or LOG(FATAL) is not a good option as this is a signal handler.
+-        // RebootSystem uses syscall() which isn't actually async-signal-safe, but our only option
+-        // and probably good enough given this is already an error case and only enabled for
+-        // development builds.
++        auto* ctx = static_cast<ucontext_t*>(uc);
++        char buf[192];
++        int n = snprintf(buf, sizeof(buf), "init_crash: sig=%d addr=%p pc=%p lr=%p sp=%p\n",
++                         signal, si ? si->si_addr : nullptr,
++                         (void*)ctx->uc_mcontext.arm_pc, (void*)ctx->uc_mcontext.arm_lr,
++                         (void*)ctx->uc_mcontext.arm_sp);
++        int fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
++        if (fd >= 0) { write(fd, buf, n); close(fd); }
+         RebootSystem(ANDROID_RB_RESTART2, "bootloader");
+     };
+-    action.sa_flags = SA_RESTART;
++    action.sa_flags = SA_RESTART | SA_SIGINFO;
+     sigaction(SIGABRT, &action, nullptr);
+     sigaction(SIGBUS, &action, nullptr);
+     sigaction(SIGFPE, &action, nullptr);
+@@ -671,8 +672,12 @@ int main(int argc, char** argv) {
+     export_kernel_boot_props();
+ 
+     // Make the time that init started available for bootstat to log.
+-    property_set("ro.boottime.init", getenv("INIT_STARTED_AT"));
+-    property_set("ro.boottime.init.selinux", getenv("INIT_SELINUX_TOOK"));
++    if (const char* init_started_at = getenv("INIT_STARTED_AT")) {
++        property_set("ro.boottime.init", init_started_at);
++    }
++    if (const char* init_selinux_took = getenv("INIT_SELINUX_TOOK")) {
++        property_set("ro.boottime.init.selinux", init_selinux_took);
++    }
+ 
+     // Set libavb version for Framework-only OTA match in Treble build.
+     const char* avb_version = getenv("INIT_AVB_VERSION");
+@@ -744,7 +749,16 @@ int main(int argc, char** argv) {
+ 
+     // Don't mount filesystems or start core system services in charger mode.
+     std::string bootmode = GetProperty("ro.bootmode", "");
+-    if (bootmode == "charger") {
++    /*
++     * pisces: allow the charger UI to be brought up on demand, which makes it
++     * testable without powering the device off and plugging it in:
++     *   - add androidboot.forcecharger=1 to the boot image command line, or
++     *   - boot the boot image with that argument.
++     * On a real off-mode charging boot the bootloader already passes
++     * androidboot.mode=charger, so this is only a debugging aid.
++     */
++    if (bootmode == "charger" ||
++            GetProperty("ro.boot.forcecharger", "0") == "1") {
+         am.QueueEventTrigger("charger");
+     } else {
+         am.QueueEventTrigger("late-init");
+diff --git a/init/log.cpp b/init/log.cpp
+index 6198fc25f..31c7a9a33 100644
+--- a/init/log.cpp
++++ b/init/log.cpp
+@@ -17,6 +17,8 @@
+ #include "log.h"
+ 
+ #include <fcntl.h>
++#include <sys/sysmacros.h>
++#include <sys/stat.h>
+ #include <linux/audit.h>
+ #include <string.h>
+ #include <unistd.h>
+@@ -55,11 +57,16 @@ static void InitAborter(const char* abort_message) {
+ void InitKernelLogging(char* argv[]) {
+     // Make stdin/stdout/stderr all point to /dev/null.
+     int fd = open("/sys/fs/selinux/null", O_RDWR);
++    if (fd == -1) {
++        // pisces: this 3.4 kernel may not provide selinuxfs; fall back to /dev/null.
++        mknod("/dev/null", S_IFCHR | 0666, makedev(1, 3));
++        fd = open("/dev/null", O_RDWR);
++    }
+     if (fd == -1) {
+         int saved_errno = errno;
+         android::base::InitLogging(argv, &android::base::KernelLogger, InitAborter);
+         errno = saved_errno;
+-        PLOG(FATAL) << "Couldn't open /sys/fs/selinux/null";
++        PLOG(FATAL) << "Couldn't open /dev/null";
+     }
+     dup2(fd, 0);
+     dup2(fd, 1);
+diff --git a/init/property_service.cpp b/init/property_service.cpp
+index f47c93596..183ad942e 100644
+--- a/init/property_service.cpp
++++ b/init/property_service.cpp
+@@ -113,6 +113,8 @@ void property_init() {
+ }
+ static bool CheckMacPerms(const std::string& name, const char* target_context,
+                           const char* source_context, const ucred& cr) {
++    // pisces recovery: no SELinux policy on the 3.4 kernel; allow property writes.
++    return true;
+     if (!target_context || !source_context) {
+         return false;
+     }
+diff --git a/init/security.cpp b/init/security.cpp
+index a3494a280..0cf130e98 100644
+--- a/init/security.cpp
++++ b/init/security.cpp
+@@ -163,6 +163,11 @@ Result<Success> SetMmapRndBitsAction(const BuiltinArguments&) {
+         return Success();
+     }
+ #elif defined(__arm__) || defined(__i386__)
++    // pisces: 3.4 kernel has no mmap_rnd_bits sysctl; skip this hardening step.
++    if (access(MMAP_RND_PATH, F_OK) != 0) {
++        LOG(WARNING) << "mmap_rnd_bits not supported by kernel, skipping";
++        return Success();
++    }
+     // check to see if we're running on 64-bit kernel
+     bool h64 = !access(MMAP_RND_COMPAT_PATH, F_OK);
+     // supported 32-bit architecture must have 16 bits set
+diff --git a/init/selinux.cpp b/init/selinux.cpp
+index 0ba5c4ae3..5563e940a 100644
+--- a/init/selinux.cpp
++++ b/init/selinux.cpp
+@@ -383,6 +383,10 @@ bool LoadPolicy() {
+ 
+ void SelinuxInitialize() {
+     Timer t;
++    // pisces: 3.4.35 kernel cannot load Android 9 SELinux policy;
++    // skip it so recovery can boot (TWRP runs permissive).
++    LOG(INFO) << "SELinux initialization skipped (pisces 3.4 kernel)";
++    return;
+ 
+     LOG(INFO) << "Loading SELinux policy";
+     if (!LoadPolicy()) {
+diff --git a/init/service.cpp b/init/service.cpp
+index c9cd5213b..8ccf9d187 100644
+--- a/init/service.cpp
++++ b/init/service.cpp
+@@ -314,7 +314,7 @@ void Service::SetProcessAttributes() {
+             PLOG(FATAL) << "setuid failed for " << name_;
+         }
+     }
+-    if (!seclabel_.empty()) {
++    if (!seclabel_.empty() && is_selinux_enabled()) {
+         if (setexeccon(seclabel_.c_str()) < 0) {
+             PLOG(FATAL) << "cannot setexeccon('" << seclabel_ << "') for " << name_;
+         }
+@@ -831,12 +831,14 @@ Result<Success> Service::Start() {
+     std::string scon;
+     if (!seclabel_.empty()) {
+         scon = seclabel_;
+-    } else {
++    } else if (is_selinux_enabled()) {
+         auto result = ComputeContextFromExecutable(args_[0]);
+         if (!result) {
+             return result.error();
+         }
+         scon = *result;
++    } else {
++        scon = "u:r:su:s0";
+     }
+ 
+     LOG(INFO) << "starting service '" << name_ << "'...";
+diff --git a/init/subcontext.cpp b/init/subcontext.cpp
+index fdb46415d..bb00bb194 100644
+--- a/init/subcontext.cpp
++++ b/init/subcontext.cpp
+@@ -20,6 +20,7 @@
+ #include <poll.h>
+ #include <sys/socket.h>
+ #include <unistd.h>
++#include <selinux/selinux.h>
+ 
+ #include <android-base/file.h>
+ #include <android-base/logging.h>
+@@ -357,7 +358,7 @@ Result<std::vector<std::string>> Subcontext::ExpandArgs(const std::vector<std::s
+ static std::vector<Subcontext> subcontexts;
+ 
+ std::vector<Subcontext>* InitializeSubcontexts() {
+-    if (SelinuxHasVendorInit()) {
++    if (is_selinux_enabled() && SelinuxHasVendorInit()) {
+         for (const auto& [path_prefix, secontext] : paths_and_secontexts) {
+             subcontexts.emplace_back(path_prefix, secontext);
+         }
+diff --git a/sdcard/sdcard.cpp b/sdcard/sdcard.cpp
+index dc36596b1..44181d213 100644
+--- a/sdcard/sdcard.cpp
++++ b/sdcard/sdcard.cpp
+@@ -142,7 +142,7 @@ static bool sdcardfs_setup_bind_remount(const std::string& source_path, const st
+     return true;
+ }
+ 
+-static bool sdcardfs_setup_secondary(const std::string& default_path, const std::string& source_path,
++static bool __attribute__((unused)) sdcardfs_setup_secondary(const std::string& default_path, const std::string& source_path,
+                                      const std::string& dest_path, uid_t fsuid, gid_t fsgid,
+                                      bool multi_user, userid_t userid, gid_t gid, mode_t mask,
+                                      bool derive_gid, bool default_normal, bool use_esdfs) {
+@@ -154,6 +154,89 @@ static bool sdcardfs_setup_secondary(const std::string& default_path, const std:
+     }
+ }
+ 
++static bool g_used_bind = false;
++
++static bool setup_or_bind(const std::string& source_path, const std::string& dest_path,
++                          uid_t uid, gid_t gid, userid_t userid, bool multi_user,
++                          gid_t gid_mask, int mask, bool derive_gid, bool default_normal,
++                          bool use_esdfs) {
++    if (sdcardfs_setup(source_path, dest_path, uid, gid, multi_user, userid, gid_mask, mask,
++                       derive_gid, default_normal, use_esdfs)) {
++        return true;
++    }
++    // pisces: the 3.4 kernel has no sdcardfs; expose the storage directly.
++    LOG(WARNING) << "sdcardfs unavailable for " << dest_path << ", using bind mount";
++    g_used_bind = true;
++    if (mount(source_path.c_str(), dest_path.c_str(), nullptr, MS_BIND, nullptr) != 0) {
++        PLOG(ERROR) << "bind mount failed for " << dest_path;
++        return false;
++    }
++    // pisces: a bind mount keeps the raw ownership of /data/media, so the
++    // mount point stays media_rw:media_rw 0770 and no app can even traverse
++    // into /storage/emulated/0 - the camera then reports "insert an SD card".
++    // Open the mount points up; the per-app isolation sdcardfs would give us is
++    // lost, but external storage works on this kernel.
++    if (chmod(dest_path.c_str(), 0771) != 0) {
++        PLOG(WARNING) << "chmod failed for " << dest_path;
++    }
++    return true;
++}
++
++// pisces: without sdcardfs the storage tree keeps the permissions the creating
++// app gave it (Snap creates DCIM/Camera with 0700), so the gallery cannot even
++// open the photos - they show up as gray rectangles.  Walk the tree once per
++// boot and make directories traversable/writable and files readable by every
++// app.  This gives up the per-app isolation sdcardfs would provide, but it is
++// the only way to make shared storage work on this kernel.
++static void relax_tree(const std::string& path, int depth, int* changed) {
++    DIR* dir = opendir(path.c_str());
++    if (dir == nullptr) {
++        return;
++    }
++    struct dirent* entry;
++    while ((entry = readdir(dir)) != nullptr) {
++        if (entry->d_name[0] == '.') {
++            continue;  // ".", ".." and hidden files are left alone
++        }
++        const std::string child = path + "/" + entry->d_name;
++        struct stat st;
++        if (lstat(child.c_str(), &st) != 0 || S_ISLNK(st.st_mode)) {
++            continue;
++        }
++        if (S_ISDIR(st.st_mode)) {
++            if (chmod(child.c_str(), 0777) != 0) {
++                PLOG(WARNING) << "chmod failed for " << child;
++            } else if ((st.st_mode & 0777) != 0777) {
++                *changed += 1;
++            }
++            if (depth < 8) {
++                relax_tree(child, depth + 1, changed);
++            }
++        } else if (S_ISREG(st.st_mode)) {
++            if ((st.st_mode & 0444) != 0444) {
++                if (chmod(child.c_str(), 0666) != 0) {
++                    PLOG(WARNING) << "chmod failed for " << child;
++                } else {
++                    *changed += 1;
++                }
++            }
++        }
++    }
++    closedir(dir);
++}
++
++static void relax_emulated_storage(const std::string& source_path, userid_t userid) {
++    // pisces: see setup_or_bind(); without sdcardfs the directories inside the
++    // storage root have to be reachable by every app or nothing can be shared.
++    const std::string root = source_path + "/" + std::to_string(userid);
++    if (chmod(root.c_str(), 0777) != 0) {
++        PLOG(WARNING) << "chmod failed for " << root;
++    }
++    int changed = 0;
++    relax_tree(root, 0, &changed);
++    LOG(INFO) << "pisces: storage tree relaxed, " << changed << " entr(y/ies) fixed";
++}
++
+ static void run_sdcardfs(const std::string& source_path, const std::string& label, uid_t uid,
+                          gid_t gid, userid_t userid, bool multi_user, bool full_write,
+                          bool derive_gid, bool default_normal, bool use_esdfs) {
+@@ -165,32 +248,51 @@ static void run_sdcardfs(const std::string& source_path, const std::string& labe
+     if (multi_user) {
+         // Multi-user storage is fully isolated per user, so "other"
+         // permissions are completely masked off.
+-        if (!sdcardfs_setup(source_path, dest_path_default, uid, gid, multi_user, userid,
+-                            AID_SDCARD_RW, 0006, derive_gid, default_normal, use_esdfs) ||
+-            !sdcardfs_setup_secondary(dest_path_default, source_path, dest_path_read, uid, gid,
+-                                      multi_user, userid, AID_EVERYBODY, 0027, derive_gid,
+-                                      default_normal, use_esdfs) ||
+-            !sdcardfs_setup_secondary(dest_path_default, source_path, dest_path_write, uid, gid,
+-                                      multi_user, userid, AID_EVERYBODY, full_write ? 0007 : 0027,
+-                                      derive_gid, default_normal, use_esdfs)) {
++        if (!setup_or_bind(source_path, dest_path_default, uid, gid, userid, multi_user,
++                           AID_SDCARD_RW, 0006, derive_gid, default_normal, use_esdfs) ||
++            !setup_or_bind(dest_path_default, dest_path_read, uid, gid, userid, multi_user,
++                           AID_EVERYBODY, 0027, derive_gid, default_normal, use_esdfs) ||
++            !setup_or_bind(dest_path_default, dest_path_write, uid, gid, userid, multi_user,
++                           AID_EVERYBODY, full_write ? 0007 : 0027, derive_gid, default_normal,
++                           use_esdfs)) {
+             LOG(FATAL) << "failed to sdcardfs_setup";
+         }
+     } else {
+         // Physical storage is readable by all users on device, but
+         // the Android directories are masked off to a single user
+         // deep inside attr_from_stat().
+-        if (!sdcardfs_setup(source_path, dest_path_default, uid, gid, multi_user, userid,
+-                            AID_SDCARD_RW, 0006, derive_gid, default_normal, use_esdfs) ||
+-            !sdcardfs_setup_secondary(dest_path_default, source_path, dest_path_read, uid, gid,
+-                                      multi_user, userid, AID_EVERYBODY, full_write ? 0027 : 0022,
+-                                      derive_gid, default_normal, use_esdfs) ||
+-            !sdcardfs_setup_secondary(dest_path_default, source_path, dest_path_write, uid, gid,
+-                                      multi_user, userid, AID_EVERYBODY, full_write ? 0007 : 0022,
+-                                      derive_gid, default_normal, use_esdfs)) {
++        if (!setup_or_bind(source_path, dest_path_default, uid, gid, userid, multi_user,
++                           AID_SDCARD_RW, 0006, derive_gid, default_normal, use_esdfs) ||
++            !setup_or_bind(dest_path_default, dest_path_read, uid, gid, userid, multi_user,
++                           AID_EVERYBODY, full_write ? 0027 : 0022, derive_gid, default_normal,
++                           use_esdfs) ||
++            !setup_or_bind(dest_path_default, dest_path_write, uid, gid, userid, multi_user,
++                           AID_EVERYBODY, full_write ? 0007 : 0022, derive_gid, default_normal,
++                           use_esdfs)) {
+             LOG(FATAL) << "failed to sdcardfs_setup";
+         }
+     }
+ 
++    // pisces: the three emulated mounts are in place; open the storage root up
++    // when they are plain bind mounts instead of sdcardfs.
++    if (g_used_bind) {
++        relax_emulated_storage(source_path, userid);
++
++        // ... and keep doing it: the media server and some apps create files
++        // with mode 0600, which every other app (the gallery in particular)
++        // then cannot open.  The worker has to stay root, so fork it before the
++        // privileges are dropped below.
++        pid_t relaxer = fork();
++        if (relaxer == 0) {
++            while (true) {
++                sleep(30);
++                relax_emulated_storage(source_path, userid);
++            }
++        } else if (relaxer < 0) {
++            PLOG(WARNING) << "could not fork the storage relaxer";
++        }
++    }
++
+     // Will abort if priv-dropping fails.
+     drop_privs(uid, gid);
+ 
+@@ -199,6 +301,14 @@ static void run_sdcardfs(const std::string& source_path, const std::string& labe
+         fs_prepare_dir(obb_path.c_str(), 0775, uid, gid);
+     }
+ 
++    if (g_used_bind) {
++        // pisces: we replaced sdcardfs with bind mounts; vold only considers the
++        // emulated volume mounted while this process is alive.
++        while (true) {
++            sleep(3600);
++        }
++    }
++
+     exit(0);
+ }
+ 
+diff --git a/usbd/usbd.cpp b/usbd/usbd.cpp
+index 191fb92fb..c826e5ead 100644
+--- a/usbd/usbd.cpp
++++ b/usbd/usbd.cpp
+@@ -34,28 +34,17 @@ using android::hardware::usb::gadget::V1_0::IUsbGadget;
+ using android::hardware::Return;
+ 
+ int main(int /*argc*/, char** /*argv*/) {
+-    configureRpcThreadpool(1, true /*callerWillJoin*/);
+-
+-    android::sp<IUsbGadget> gadget = IUsbGadget::getService();
+-    Return<void> ret;
+-
+-    if (gadget != nullptr) {
+-        LOG(INFO) << "Usb HAL found.";
+-        std::string function = GetProperty(PERSISTENT_USB_CONFIG, "");
+-        if (function == "adb") {
+-            LOG(INFO) << "peristent prop is adb";
+-            SetProperty("ctl.start", "adbd");
+-            ret = gadget->setCurrentUsbFunctions(static_cast<uint64_t>(GadgetFunction::ADB),
+-                                                 nullptr, 0);
+-        } else {
+-            LOG(INFO) << "Signal MTP to enable default functions";
+-            ret = gadget->setCurrentUsbFunctions(static_cast<uint64_t>(GadgetFunction::MTP),
+-                                                 nullptr, 0);
+-        }
+-
+-        if (!ret.isOk()) LOG(ERROR) << "Error while invoking usb hal";
+-    } else {
+-        LOG(INFO) << "Usb HAL not found";
++    /* pisces: keep this daemon out of the composition business.  It is started
++     * from late_start, i.e. after init.pisces.rc has already installed the boot
++     * composition (mtp,adb) from this same property.  The stock fallback then
++     * replaced it with MTP only (idProduct 4ee1, adbd stopped, ffs unbound),
++     * which is why every boot came up without adb and with a gadget the
++     * framework had not asked for.  Starting adbd early is still useful because
++     * the ffs function needs it before the interface can bind. */
++    std::string function = GetProperty(PERSISTENT_USB_CONFIG, "");
++    if (function == "adb") {
++        LOG(INFO) << "persistent prop is adb";
++        SetProperty("ctl.start", "adbd");
+     }
+-    exit(0);
++    return 0;
+ }

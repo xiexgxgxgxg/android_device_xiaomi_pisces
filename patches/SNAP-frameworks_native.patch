@@ -86,11 +86,25 @@ index 6b340a8d3..3a11cc1fd 100644
      char *sctx = NULL;
      const char *class = "service_manager";
      bool allowed;
+diff --git a/libs/gui/Android.bp b/libs/gui/Android.bp
+index e4da22f8d..d71c33a5a 100644
+--- a/libs/gui/Android.bp
++++ b/libs/gui/Android.bp
+@@ -184,7 +184,8 @@ cc_library_shared {
+     vndk: {
+         enabled: true,
+     },
+-    defaults: ["libgui_defaults"]
++    defaults: ["libgui_defaults"],
++    srcs: ["pisces_sensors_compat.cpp"],
+ }
+ 
+ cc_library_shared {
 diff --git a/libs/ui/Gralloc2.cpp b/libs/ui/Gralloc2.cpp
-index 918251f9d..c3057e941 100644
+index 918251f9d..29d4c5dd0 100644
 --- a/libs/ui/Gralloc2.cpp
 +++ b/libs/ui/Gralloc2.cpp
-@@ -20,6 +20,11 @@
+@@ -20,6 +20,12 @@
  #include <hwbinder/IPCThreadState.h>
  #include <ui/Gralloc2.h>
  
@@ -98,34 +112,110 @@ index 918251f9d..c3057e941 100644
 +#include <hardware/hardware.h>
 +
 +#include <mutex>
++#include <map>
 +
  #include <inttypes.h>
  #include <log/log.h>
  #pragma clang diagnostic push
-@@ -339,6 +344,53 @@ std::string Allocator::dumpDebugInfo() const
+@@ -35,6 +41,42 @@ namespace {
+ 
+ static constexpr Error kTransactionError = Error::NO_RESOURCES;
+ 
++// pisces: buffers allocated by allocateLocally() are handed to the mapper,
++// which clones the native handle and keeps the clone.  The nvmap memory still
++// belongs to the original handle returned by gralloc, and nothing ever frees
++// it: every buffer libui releases leaked its allocation.  SurfaceFlinger had
++// 790 MB of nvmap resident and eglCreateWindowSurface started failing with
++// EGL_BAD_ALLOC, which crash-looped SystemUI.
++//
++// Remember clone -> original and hand the memory back in Mapper::freeBuffer().
++std::mutex gLocalGrallocMutex;
++alloc_device_t* gLocalGrallocDevice = nullptr;
++std::map<const native_handle_t*, const native_handle_t*> gLocalGrallocOrigins;
++
++// Caller must hold gLocalGrallocMutex.
++alloc_device_t* getLocalGrallocDeviceLocked() {
++    if (gLocalGrallocDevice != nullptr) {
++        return gLocalGrallocDevice;
++    }
++
++    gralloc_module_t const* module = nullptr;
++    if (hw_get_module(GRALLOC_HARDWARE_MODULE_ID,
++            reinterpret_cast<const hw_module_t**>(&module)) != 0) {
++        ALOGE("pisces: local gralloc module not found");
++        return nullptr;
++    }
++
++    alloc_device_t* device = nullptr;
++    if (gralloc_open(reinterpret_cast<const hw_module_t*>(module), &device) != 0 ||
++            device == nullptr) {
++        ALOGE("pisces: local gralloc open failed");
++        return nullptr;
++    }
++
++    gLocalGrallocDevice = device;
++    return device;
++}
++
+ uint64_t getValid10UsageBits() {
+     static const uint64_t valid10UsageBits = []() -> uint64_t {
+         using hardware::graphics::common::V1_0::BufferUsage;
+@@ -160,11 +202,31 @@ Error Mapper::importBuffer(const hardware::hidl_handle& rawHandle,
+ void Mapper::freeBuffer(buffer_handle_t bufferHandle) const
+ {
+     auto buffer = const_cast<native_handle_t*>(bufferHandle);
++
++    // pisces: if this handle was allocated locally, it is the mapper's clone
++    // and the real allocation is the original handle we stashed away.
++    const native_handle_t* origin = nullptr;
++    alloc_device_t* device = nullptr;
++    {
++        std::lock_guard<std::mutex> lock(gLocalGrallocMutex);
++        auto it = gLocalGrallocOrigins.find(buffer);
++        if (it != gLocalGrallocOrigins.end()) {
++            origin = it->second;
++            gLocalGrallocOrigins.erase(it);
++            device = gLocalGrallocDevice;
++        }
++    }
++
+     auto ret = mMapper->freeBuffer(buffer);
+ 
+     auto error = (ret.isOk()) ? static_cast<Error>(ret) : kTransactionError;
+     ALOGE_IF(error != Error::NONE, "freeBuffer(%p) failed with %d",
+             buffer, error);
++
++    if (origin != nullptr && device != nullptr) {
++        int res = device->free(device, const_cast<native_handle_t*>(origin));
++        ALOGE_IF(res != 0, "pisces: local gralloc free failed: %d", res);
++    }
+ }
+ 
+ Error Mapper::validateBufferSize(buffer_handle_t bufferHandle,
+@@ -339,6 +401,61 @@ std::string Allocator::dumpDebugInfo() const
      return debugInfo;
  }
  
 +Error Allocator::allocateLocally(const IMapper::BufferDescriptorInfo& info,
 +        uint32_t count, uint32_t* outStride, buffer_handle_t* outBufferHandles) const {
-+    static std::mutex mutex;
-+    static alloc_device_t* device = nullptr;
++    // Release everything allocated so far, both the mapper clones and the
++    // gralloc memory behind them.
++    auto rollback = [&](uint32_t done) {
++        for (uint32_t j = 0; j < done; j++) {
++            if (outBufferHandles[j] != nullptr) {
++                mMapper.freeBuffer(outBufferHandles[j]);
++                outBufferHandles[j] = nullptr;
++            }
++        }
++    };
 +
-+    std::lock_guard<std::mutex> lock(mutex);
++    alloc_device_t* device = nullptr;
++    {
++        std::lock_guard<std::mutex> lock(gLocalGrallocMutex);
++        device = getLocalGrallocDeviceLocked();
++    }
 +    if (device == nullptr) {
-+        gralloc_module_t const* module = nullptr;
-+        if (hw_get_module(GRALLOC_HARDWARE_MODULE_ID,
-+                reinterpret_cast<const hw_module_t**>(&module)) != 0) {
-+            ALOGE("pisces: local gralloc module not found");
-+            return Error::NO_RESOURCES;
-+        }
-+        alloc_device_t* dev = nullptr;
-+        if (gralloc_open(reinterpret_cast<const hw_module_t*>(module), &dev) != 0 ||
-+                dev == nullptr) {
-+            ALOGE("pisces: local gralloc open failed");
-+            return Error::NO_RESOURCES;
-+        }
-+        device = dev;
++        return Error::NO_RESOURCES;
 +    }
 +
 +    uint32_t stride = 0;
@@ -138,6 +228,7 @@ index 918251f9d..c3057e941 100644
 +                &handle, &s);
 +        if (res != 0 || handle == nullptr) {
 +            ALOGE("pisces: local gralloc alloc failed: %d", res);
++            rollback(i);
 +            return Error::NO_RESOURCES;
 +        }
 +        stride = static_cast<uint32_t>(s);
@@ -146,7 +237,14 @@ index 918251f9d..c3057e941 100644
 +            ALOGE("pisces: local import failed: %d", error);
 +            device->free(device, handle);
 +            outBufferHandles[i] = nullptr;
++            rollback(i);
 +            return error;
++        }
++        // pisces: importBuffer clones the handle; remember the original so the
++        // memory can be released when the clone is freed.
++        {
++            std::lock_guard<std::mutex> lock(gLocalGrallocMutex);
++            gLocalGrallocOrigins[outBufferHandles[i]] = handle;
 +        }
 +    }
 +    *outStride = stride;
@@ -156,7 +254,7 @@ index 918251f9d..c3057e941 100644
  Error Allocator::allocate(BufferDescriptor descriptor, uint32_t count,
          uint32_t* outStride, buffer_handle_t* outBufferHandles) const
  {
-@@ -347,6 +399,7 @@ Error Allocator::allocate(BufferDescriptor descriptor, uint32_t count,
+@@ -347,6 +464,7 @@ Error Allocator::allocate(BufferDescriptor descriptor, uint32_t count,
              [&](const auto& tmpError, const auto& tmpStride,
                  const auto& tmpBuffers) {
                  error = tmpError;
@@ -164,7 +262,7 @@ index 918251f9d..c3057e941 100644
                  if (tmpError != Error::NONE) {
                      return;
                  }
-@@ -355,6 +408,7 @@ Error Allocator::allocate(BufferDescriptor descriptor, uint32_t count,
+@@ -355,6 +473,7 @@ Error Allocator::allocate(BufferDescriptor descriptor, uint32_t count,
                  for (uint32_t i = 0; i < count; i++) {
                      error = mMapper.importBuffer(tmpBuffers[i],
                              &outBufferHandles[i]);
@@ -172,7 +270,7 @@ index 918251f9d..c3057e941 100644
                      if (error != Error::NONE) {
                          for (uint32_t j = 0; j < i; j++) {
                              mMapper.freeBuffer(outBufferHandles[j]);
-@@ -370,6 +424,8 @@ Error Allocator::allocate(BufferDescriptor descriptor, uint32_t count,
+@@ -370,6 +489,8 @@ Error Allocator::allocate(BufferDescriptor descriptor, uint32_t count,
      // make sure the kernel driver sees BC_FREE_BUFFER and closes the fds now
      hardware::IPCThreadState::self()->flushCommands();
  
@@ -182,14 +280,14 @@ index 918251f9d..c3057e941 100644
  }
  
 diff --git a/libs/ui/GraphicBufferAllocator.cpp b/libs/ui/GraphicBufferAllocator.cpp
-index eaba1ed1a..f04784fa6 100644
+index eaba1ed1a..b30eb9d2d 100644
 --- a/libs/ui/GraphicBufferAllocator.cpp
 +++ b/libs/ui/GraphicBufferAllocator.cpp
 @@ -98,6 +98,8 @@ status_t GraphicBufferAllocator::allocate(uint32_t width, uint32_t height,
          uint64_t /*graphicBufferId*/, std::string requestorName)
  {
      ATRACE_CALL();
-+    ALOGE("pisces: GBA::allocate enter %ux%u usage=%llx", width, height,
++    ALOGV("pisces: GBA::allocate enter %ux%u usage=%llx", width, height,
 +          static_cast<unsigned long long>(usage));
  
      // make sure to not allocate a N x 0 or 0 x N buffer, since this is
@@ -248,3 +346,71 @@ index 7f769114e..322923516 100644
              f = (__eglMustCastToProperFunctionPointerType)gl_unimplemented;
  
              /*
+diff --git a/services/surfaceflinger/SurfaceFlinger.cpp b/services/surfaceflinger/SurfaceFlinger.cpp
+index f513b9fd7..e2fdc66a5 100644
+--- a/services/surfaceflinger/SurfaceFlinger.cpp
++++ b/services/surfaceflinger/SurfaceFlinger.cpp
+@@ -2286,6 +2286,10 @@ void SurfaceFlinger::handleTransaction(uint32_t transactionFlags)
+     handleTransactionLocked(transactionFlags);
+ 
+     mLastTransactionTime = systemTime() - now;
++    if (mLastTransactionTime > ms2ns(100)) {
++        ALOGW("pisces: transaction took %" PRId64 " ms (flags 0x%x)",
++                ns2ms(mLastTransactionTime), transactionFlags);
++    }
+     mDebugInTransaction = 0;
+     invalidateHwcGeometry();
+     // here the transaction has been committed
+@@ -3354,7 +3358,12 @@ void SurfaceFlinger::setTransactionState(
+         // For window updates that are part of an animation we must wait for
+         // previous animation "frames" to be handled.
+         while (mAnimTransactionPending) {
+-            status_t err = mTransactionCV.waitRelative(mStateLock, s2ns(5));
++            // pisces: this used to wait five seconds for the previous animation
++            // frame while the caller held the SurfaceComposerClient lock, which
++            // blocked createSurface() from the same process and froze the window
++            // manager long enough for the system to report an ANR.  A short
++            // timeout keeps the frame pacing but never stalls the caller.
++            status_t err = mTransactionCV.waitRelative(mStateLock, ms2ns(500));
+             if (CC_UNLIKELY(err != NO_ERROR)) {
+                 // just in case something goes wrong in SF, return to the
+                 // caller after a few seconds.
+@@ -3411,7 +3420,9 @@ void SurfaceFlinger::setTransactionState(
+             mAnimTransactionPending = true;
+         }
+         while (mTransactionPending) {
+-            status_t err = mTransactionCV.waitRelative(mStateLock, s2ns(5));
++            // pisces: see above - a synchronous transaction must not hold its
++            // caller for five seconds either.
++            status_t err = mTransactionCV.waitRelative(mStateLock, ms2ns(500));
+             if (CC_UNLIKELY(err != NO_ERROR)) {
+                 // just in case something goes wrong in SF, return to the
+                 // called after a few seconds.
+@@ -3696,7 +3707,9 @@ status_t SurfaceFlinger::createLayer(const String8& name, const sp<Client>& clie
+ 
+     sp<Layer> layer;
+ 
++    const nsecs_t piscesT0 = systemTime();
+     String8 uniqueName = getUniqueLayerName(name);
++    const nsecs_t piscesT1 = systemTime();
+ 
+     switch (flags & ISurfaceComposerClient::eFXSurfaceMask) {
+         case ISurfaceComposerClient::eFXSurfaceNormal:
+@@ -3731,9 +3744,17 @@ status_t SurfaceFlinger::createLayer(const String8& name, const sp<Client>& clie
+         layer->setPrimaryDisplayOnly();
+     }
+ 
++    const nsecs_t piscesT2 = systemTime();
+     layer->setInfo(windowType, ownerUid);
+ 
+     result = addClientLayer(client, *handle, *gbp, layer, parentHandle, parentLayer);
++    const nsecs_t piscesT3 = systemTime();
++    if (piscesT3 - piscesT0 > ms2ns(5)) {
++        ALOGW("pisces: createLayer %s took %" PRId64 " ms (name %" PRId64
++                ", buffer %" PRId64 ", add %" PRId64 ")", name.string(),
++                ns2ms(piscesT3 - piscesT0), ns2ms(piscesT1 - piscesT0),
++                ns2ms(piscesT2 - piscesT1), ns2ms(piscesT3 - piscesT2));
++    }
+     if (result != NO_ERROR) {
+         return result;
+     }

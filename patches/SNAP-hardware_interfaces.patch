@@ -1,0 +1,371 @@
+diff --git a/camera/device/1.0/default/CameraDevice.cpp b/camera/device/1.0/default/CameraDevice.cpp
+index a1f1830f..54c0f7be 100644
+--- a/camera/device/1.0/default/CameraDevice.cpp
++++ b/camera/device/1.0/default/CameraDevice.cpp
+@@ -92,6 +92,15 @@ CameraDevice::CameraDevice(
+         mDisconnected(false),
+         mCameraDeviceNames(cameraDeviceNames) {
+     mCameraIdInt = atoi(mCameraId.c_str());
++    // pisces: the camera id base of the provider instance this device belongs
++    // to (0 for the rear provider, 1 for the front one); the HAL module always
++    // numbers its cameras from zero.
++    {
++        const char *base = getenv("PISCES_CAM_ID_BASE");
++        if (base != NULL) {
++            mCameraIdInt -= atoi(base);
++        }
++    }
+     // Should not reach here as provider also validate ID
+     if (mCameraIdInt < 0 || mCameraIdInt >= module->getNumberOfCameras()) {
+         ALOGE("%s: Invalid camera id: %s", __FUNCTION__, mCameraId.c_str());
+@@ -695,11 +704,15 @@ Return<Status> CameraDevice::open(const sp<ICameraDeviceCallback>& callback) {
+     if (mModule->getModuleApiVersion() >= CAMERA_MODULE_API_VERSION_2_3 &&
+         info.device_version > CAMERA_DEVICE_API_VERSION_1_0) {
+         // Open higher version camera device as HAL1.0 device.
+-        rc = mModule->openLegacy(mCameraId.c_str(),
++        char moduleId[8];
++        snprintf(moduleId, sizeof(moduleId), "%d", mCameraIdInt);
++        rc = mModule->openLegacy(moduleId,
+                                  CAMERA_DEVICE_API_VERSION_1_0,
+                                  (hw_device_t **)&mDevice);
+     } else {
+-        rc = mModule->open(mCameraId.c_str(), (hw_device_t **)&mDevice);
++        char moduleId[8];
++        snprintf(moduleId, sizeof(moduleId), "%d", mCameraIdInt);
++        rc = mModule->open(moduleId, (hw_device_t **)&mDevice);
+     }
+     if (rc != OK) {
+         mDevice = nullptr;
+diff --git a/camera/provider/2.4/default/CameraProvider.cpp b/camera/provider/2.4/default/CameraProvider.cpp
+index 63139390..7bc06942 100644
+--- a/camera/provider/2.4/default/CameraProvider.cpp
++++ b/camera/provider/2.4/default/CameraProvider.cpp
+@@ -37,6 +37,23 @@ namespace implementation {
+ 
+ namespace {
+ const char *kLegacyProviderName = "legacy/0";
++
++// pisces: the HIDL instance name of this provider process (legacy/0 for the
++// rear sensor, legacy/1 for the front one); HIDL_FETCH_ICameraProvider is
++// called with the same name the service registered.
++static const char *legacyProviderName()
++{
++    const char *instance = getenv("PISCES_PROVIDER_INSTANCE");
++    return (instance != NULL) ? instance : kLegacyProviderName;
++}
++
++// pisces: the camera id base of this provider instance (0 for the rear
++// provider, 1 for the front one), so the two providers expose unique ids.
++static int cameraIdBase()
++{
++    const char *base = getenv("PISCES_CAM_ID_BASE");
++    return (base != NULL) ? atoi(base) : 0;
++}
+ const char *kExternalProviderName = "external/0";
+ // "device@<version>/legacy/<id>"
+ const std::regex kDeviceNameRE("device@([0-9]+\\.[0-9]+)/legacy/(.+)");
+@@ -71,7 +88,7 @@ using ::android::hardware::camera::common::V1_0::Status;
+ void CameraProvider::addDeviceNames(int camera_id, CameraDeviceStatus status, bool cam_new)
+ {
+     char cameraId[kMaxCameraIdLen];
+-    snprintf(cameraId, sizeof(cameraId), "%d", camera_id);
++    snprintf(cameraId, sizeof(cameraId), "%d", camera_id + cameraIdBase());
+     std::string cameraIdStr(cameraId);
+ 
+     mCameraIds.add(cameraIdStr);
+@@ -330,7 +347,9 @@ bool CameraProvider::initialize() {
+         }
+ 
+         char cameraId[kMaxCameraIdLen];
+-        snprintf(cameraId, sizeof(cameraId), "%d", i);
++        // pisces: key the status map by the same (base-shifted) id that
++        // addDeviceNames() uses, otherwise getCameraIdList() skips the device.
++        snprintf(cameraId, sizeof(cameraId), "%d", i + cameraIdBase());
+         std::string cameraIdStr(cameraId);
+         mCameraStatusMap[cameraIdStr] = CAMERA_DEVICE_STATUS_PRESENT;
+ 
+@@ -607,7 +626,7 @@ Return<void> CameraProvider::getCameraDeviceInterface_V3_x(
+ }
+ 
+ ICameraProvider* HIDL_FETCH_ICameraProvider(const char* name) {
+-    if (strcmp(name, kLegacyProviderName) == 0) {
++    if (strcmp(name, legacyProviderName()) == 0) {
+         CameraProvider* provider = new CameraProvider();
+         if (provider == nullptr) {
+             ALOGE("%s: cannot allocate camera provider!", __FUNCTION__);
+diff --git a/camera/provider/2.4/default/service.cpp b/camera/provider/2.4/default/service.cpp
+index 7eeb6379..bee02310 100644
+--- a/camera/provider/2.4/default/service.cpp
++++ b/camera/provider/2.4/default/service.cpp
+@@ -20,6 +20,7 @@
+ #include <hidl/LegacySupport.h>
+ 
+ #include <binder/ProcessState.h>
++#include <stdlib.h>
+ 
+ using android::hardware::camera::provider::V2_4::ICameraProvider;
+ using android::hardware::defaultPassthroughServiceImplementation;
+@@ -30,5 +31,17 @@ int main()
+     // The camera HAL may communicate to other vendor components via
+     // /dev/vndbinder
+     android::ProcessState::initWithDriver("/dev/vndbinder");
+-    return defaultPassthroughServiceImplementation<ICameraProvider>("legacy/0", /*maxThreads*/ 6);
++
++    // pisces: the 2013 Tegra camera HAL can only serve one sensor per process,
++    // so the provider is started twice - once per sensor - and the camera
++    // service switches between the two providers instead of switching sensors
++    // inside one HAL.  The instance name (and the camera id base that keeps the
++    // ids unique across the two providers) comes from the environment, set by
++    // the init service definition.
++    const char *instance = getenv("PISCES_PROVIDER_INSTANCE");
++    if (instance == NULL) {
++        instance = "legacy/0";
++    }
++    ALOGI("Camera provider instance: %s", instance);
++    return defaultPassthroughServiceImplementation<ICameraProvider>(instance, /*maxThreads*/ 6);
+ }
+diff --git a/graphics/composer/2.1/utils/hal/include/composer-hal/2.1/ComposerCommandEngine.h b/graphics/composer/2.1/utils/hal/include/composer-hal/2.1/ComposerCommandEngine.h
+index 36aa64ef..e04ef6ff 100644
+--- a/graphics/composer/2.1/utils/hal/include/composer-hal/2.1/ComposerCommandEngine.h
++++ b/graphics/composer/2.1/utils/hal/include/composer-hal/2.1/ComposerCommandEngine.h
+@@ -22,6 +22,11 @@
+ 
+ #include <vector>
+ 
++#include <atomic>
++#include <chrono>
++#include <thread>
++#include <unistd.h>
++
+ #include <composer-command-buffer/2.1/ComposerCommandBuffer.h>
+ #include <composer-hal/2.1/ComposerHal.h>
+ #include <composer-hal/2.1/ComposerResources.h>
+@@ -37,6 +42,39 @@ namespace V2_1 {
+ namespace hal {
+ 
+ // TODO own a CommandReaderBase rather than subclassing
++// pisces: the vendor HWC's set() sometimes never returns, which leaves
++// SurfaceFlinger blocked in presentDisplay() and every window operation queued
++// behind it until the system watchdog restarts the whole framework.  Exiting the
++// composer process instead lets init respawn it and SurfaceFlinger recovers by
++// itself (verified: killing the composer only blanks the screen for a moment).
++static std::atomic<long long> gPiscesPresentStartMs{0};
++static std::atomic<bool> gPiscesWatchdogRunning{false};
++
++static inline long long piscesNowMs() {
++    return std::chrono::duration_cast<std::chrono::milliseconds>(
++            std::chrono::steady_clock::now().time_since_epoch()).count();
++}
++
++static void piscesWatchdogThread() {
++    while (true) {
++        std::this_thread::sleep_for(std::chrono::milliseconds(500));
++        const long long start = gPiscesPresentStartMs.load();
++        if (start != 0 && piscesNowMs() - start > 1000) {
++            __android_log_print(ANDROID_LOG_ERROR, "pisces-wd",
++                    "presentDisplay stuck for %lld ms (normal is under 100 ms), restarting the composer",
++                    piscesNowMs() - start);
++            _exit(1);
++        }
++    }
++}
++
++static inline void piscesEnsureWatchdog() {
++    bool expected = false;
++    if (gPiscesWatchdogRunning.compare_exchange_strong(expected, true)) {
++        std::thread(piscesWatchdogThread).detach();
++    }
++}
++
+ class ComposerCommandEngine : protected CommandReaderBase {
+    public:
+     ComposerCommandEngine(ComposerHal* hal, ComposerResources* resources)
+@@ -328,7 +366,22 @@ class ComposerCommandEngine : protected CommandReaderBase {
+         int presentFence = -1;
+         std::vector<Layer> layers;
+         std::vector<int> fences;
++        // pisces: track how long the vendor composer needs to present, so a
++        // blocking display controller/HWC shows up in the log instead of only in
++        // a watchdog trace.
++        piscesEnsureWatchdog();
++        gPiscesPresentStartMs.store(piscesNowMs());
++        auto piscesStart = std::chrono::steady_clock::now();
+         auto err = mHal->presentDisplay(mCurrentDisplay, &presentFence, &layers, &fences);
++        gPiscesPresentStartMs.store(0);
++        {
++            auto piscesMs = std::chrono::duration_cast<std::chrono::milliseconds>(
++                    std::chrono::steady_clock::now() - piscesStart).count();
++            if (piscesMs > 100) {
++                ALOGW("pisces: presentDisplay took %lld ms (err=%d)",
++                        static_cast<long long>(piscesMs), static_cast<int>(err));
++            }
++        }
+         if (err == Error::NONE) {
+             mWriter.setPresentFence(presentFence);
+             mWriter.setReleaseFences(layers, fences);
+diff --git a/graphics/composer/2.1/utils/hwc2on1adapter/HWC2On1Adapter.cpp b/graphics/composer/2.1/utils/hwc2on1adapter/HWC2On1Adapter.cpp
+index 6551a99a..eb1b9cb6 100644
+--- a/graphics/composer/2.1/utils/hwc2on1adapter/HWC2On1Adapter.cpp
++++ b/graphics/composer/2.1/utils/hwc2on1adapter/HWC2On1Adapter.cpp
+@@ -31,6 +31,7 @@
+ 
+ #include <hardware/hwcomposer.h>
+ #include <log/log.h>
++#include <cutils/properties.h>
+ #include <utils/Trace.h>
+ 
+ using namespace std::chrono_literals;
+@@ -1832,8 +1833,11 @@ void HWC2On1Adapter::Display::updateTypeChanges(const hwc_layer_1_t& hwc1Layer,
+             }
+             break;
+         case HWC_OVERLAY:
+-            if (layer.getCompositionType() != Composition::Device) {
+-                mChanges->addTypeChange(layerId, Composition::Device);
++            // pisces: the legacy HWC1 blob segfaults in presentDisplay when
++            // asked to handle device (overlay) layers. Force GPU composition
++            // for every overlay and let HWC only present the client target.
++            if (layer.getCompositionType() != Composition::Client) {
++                mChanges->addTypeChange(layerId, Composition::Client);
+             }
+             break;
+         case HWC_BACKGROUND:
+@@ -2378,6 +2382,27 @@ bool HWC2On1Adapter::prepareAllDisplays() {
+                 mHwc1Contents.data());
+     }
+ 
++    // pisces: the vendor HWC (2013 tegra) crashes and hangs when it is handed
++    // per-layer buffers (NvGrAddFence / NvGrUnregisterBuffer / null pointers in
++    // hwcomposer.tegra.so).  Force SurfaceFlinger to compose everything with the
++    // GPU and give the HWC only the client target, which is the one path that
++    // stays stable.
++    {
++        char forceClient[PROPERTY_VALUE_MAX] = {0};
++        property_get("persist.pisces.force_client_comp", forceClient, "0");
++        if (forceClient[0] == '1') {
++            for (auto& contents : mHwc1Contents) {
++                if (!contents || contents->numHwLayers < 1) {
++                    continue;
++                }
++                for (size_t l = 0; l + 1 < contents->numHwLayers; ++l) {
++                    contents->hwLayers[l].compositionType = HWC_FRAMEBUFFER;
++                }
++            }
++            ALOGV("Forced client composition for all layers");
++        }
++    }
++
+     for (size_t c = 0; c < mHwc1Contents.size(); ++c) {
+         auto& contents = mHwc1Contents[c];
+         if (!contents) {
+diff --git a/graphics/composer/2.1/utils/hwc2onfbadapter/Android.bp b/graphics/composer/2.1/utils/hwc2onfbadapter/Android.bp
+index 73a41f7f..61ff2b0e 100644
+--- a/graphics/composer/2.1/utils/hwc2onfbadapter/Android.bp
++++ b/graphics/composer/2.1/utils/hwc2onfbadapter/Android.bp
+@@ -25,9 +25,10 @@ cc_library_shared {
+ 
+     srcs: [
+         "HWC2OnFbAdapter.cpp",
++        "PiscesFbDevice.cpp",
+     ],
+ 
+     header_libs: ["libhardware_headers"],
+-    shared_libs: ["liblog", "libsync"],
++    shared_libs: ["liblog", "libsync", "libhardware", "libcutils"],
+     export_include_dirs: ["include"],
+ }
+diff --git a/graphics/composer/2.1/utils/passthrough/include/composer-passthrough/2.1/HwcLoader.h b/graphics/composer/2.1/utils/passthrough/include/composer-passthrough/2.1/HwcLoader.h
+index 33c914dd..f2106876 100644
+--- a/graphics/composer/2.1/utils/passthrough/include/composer-passthrough/2.1/HwcLoader.h
++++ b/graphics/composer/2.1/utils/passthrough/include/composer-passthrough/2.1/HwcLoader.h
+@@ -28,6 +28,8 @@
+ #include <hardware/gralloc.h>
+ #include <hardware/hardware.h>
+ #include <hardware/hwcomposer.h>
++#include <hardware/fb.h>
++#include <cutils/properties.h>
+ #include <hardware/hwcomposer2.h>
+ #include <hwc2on1adapter/HWC2On1Adapter.h>
+ #include <hwc2onfbadapter/HWC2OnFbAdapter.h>
+@@ -38,6 +40,8 @@ namespace hardware {
+ namespace graphics {
+ namespace composer {
+ namespace V2_1 {
++extern "C" framebuffer_device_t* piscesOpenFbDevice();
++
+ namespace passthrough {
+ 
+ class HwcLoader {
+@@ -58,6 +62,18 @@ class HwcLoader {
+ 
+     // load hwcomposer2 module
+     static const hw_module_t* loadModule() {
++        // pisces: when the framebuffer composer is requested, go straight to the
++        // gralloc module so openDeviceWithAdapter() builds our fb device instead
++        // of loading the crashing vendor hwcomposer.
++        char ownFb[PROPERTY_VALUE_MAX] = {0};
++        property_get("persist.pisces.fb_composer", ownFb, "0");
++        if (ownFb[0] == '1') {
++            const hw_module_t* fbModule;
++            if (hw_get_module(GRALLOC_HARDWARE_MODULE_ID, &fbModule) == 0) {
++                ALOGI("fb composer requested, using the gralloc module");
++                return fbModule;
++            }
++        }
+         const hw_module_t* module;
+         int error = hw_get_module(HWC_HARDWARE_MODULE_ID, &module);
+         if (error) {
+@@ -122,6 +138,21 @@ class HwcLoader {
+ 
+    private:
+     static hwc2_device_t* adaptGrallocModule(const hw_module_t* module) {
++        // pisces: prefer our own framebuffer device.  The vendor gralloc's
++        // framebuffer_device_t does not match what HWC2OnFbAdapter expects and
++        // crashed it, so the framebuffer path (which keeps the vendor HWC out
++        // of the picture entirely) only works with this one.
++        char ownFb[PROPERTY_VALUE_MAX] = {0};
++        property_get("persist.pisces.fb_composer", ownFb, "0");
++        if (ownFb[0] == '1') {
++            framebuffer_device_t* own = piscesOpenFbDevice();
++            if (own != nullptr) {
++                ALOGI("using the pisces framebuffer device");
++                return new HWC2OnFbAdapter(own);
++            }
++            ALOGE("pisces framebuffer device unavailable, falling back");
++        }
++
+         framebuffer_device_t* device;
+         int error = framebuffer_open(module, &device);
+         if (error) {
+diff --git a/usb/1.0/default/Usb.cpp b/usb/1.0/default/Usb.cpp
+index 6eb88428..310e1119 100644
+--- a/usb/1.0/default/Usb.cpp
++++ b/usb/1.0/default/Usb.cpp
+@@ -241,7 +241,27 @@ Status getPortStatusHelper (hidl_vec<PortStatus>& currentPortStatus) {
+     std::vector<std::string> names;
+     Status result = getTypeCPortNamesHelper(names);
+ 
+-    if (result == Status::SUCCESS) {
++    if (result == Status::ERROR || names.empty()) {
++        {
++            /* pisces: the helper returns ERROR when /sys/class/dual_role_usb
++             * does not exist at all (this board has neither dual_role_usb nor
++             * typec). */
++            /* pisces: this board has neither /sys/class/dual_role_usb nor
++             * typec, so the HAL reported no ports at all.  UsbPortManager then
++             * cannot tell that the data role is DEVICE and
++             * UsbDetailsFunctionsController disables the whole USB preferences
++             * page.  Report the one physical port as a device/sink port. */
++            ALOGI("no dual_role_usb ports, reporting the fixed device port");
++            currentPortStatus.resize(1);
++            currentPortStatus[0].portName = "port0";
++            currentPortStatus[0].currentDataRole = PortDataRole::DEVICE;
++            currentPortStatus[0].currentPowerRole = PortPowerRole::SINK;
++            currentPortStatus[0].currentMode = PortMode::UFP;
++            currentPortStatus[0].canChangeMode = false;
++            currentPortStatus[0].canChangeDataRole = false;
++            currentPortStatus[0].canChangePowerRole = false;
++            return Status::SUCCESS;
++        }
+         currentPortStatus.resize(names.size());
+         for(std::vector<std::string>::size_type i = 0; i < names.size(); i++) {
+             ALOGI("%s", names[i].c_str());
