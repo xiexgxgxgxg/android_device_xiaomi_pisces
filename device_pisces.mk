@@ -48,6 +48,16 @@ PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/permissions/com.broadcom.bt.xml:system/etc/permissions/com.broadcom.bt.xml \
     $(LOCAL_PATH)/permissions/com.broadcom.nfc.xml:system/etc/permissions/com.broadcom.nfc.xml \
     $(LOCAL_PATH)/nfc/libnfc-nci.conf:system/etc/libnfc-nci.conf \
+    $(LOCAL_PATH)/selinux/plat_file_contexts:system/etc/selinux/plat_file_contexts \
+    $(LOCAL_PATH)/selinux/plat_hwservice_contexts:system/etc/selinux/plat_hwservice_contexts \
+    $(LOCAL_PATH)/selinux/plat_property_contexts:system/etc/selinux/plat_property_contexts \
+    $(LOCAL_PATH)/selinux/plat_seapp_contexts:system/etc/selinux/plat_seapp_contexts \
+    $(LOCAL_PATH)/selinux/plat_service_contexts:system/etc/selinux/plat_service_contexts \
+    $(LOCAL_PATH)/selinux/vendor_file_contexts:system/vendor/etc/selinux/vendor_file_contexts \
+    $(LOCAL_PATH)/selinux/vendor_hwservice_contexts:system/vendor/etc/selinux/vendor_hwservice_contexts \
+    $(LOCAL_PATH)/selinux/vendor_property_contexts:system/vendor/etc/selinux/vendor_property_contexts \
+    $(LOCAL_PATH)/selinux/vendor_seapp_contexts:system/vendor/etc/selinux/vendor_seapp_contexts \
+    $(LOCAL_PATH)/selinux/vendor_service_contexts:system/vendor/etc/selinux/vendor_service_contexts \
     $(LOCAL_PATH)/permissions/com.nvidia.graphics.xml:system/etc/permissions/com.nvidia.graphics.xml \
     $(LOCAL_PATH)/permissions/com.nvidia.miracast.xml:system/etc/permissions/com.nvidia.miracast.xml \
     $(LOCAL_PATH)/permissions/com.nvidia.nvsi.xml:system/etc/permissions/com.nvidia.nvsi.xml \

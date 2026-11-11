@@ -63,6 +63,32 @@ index 2773da54b00..003cdef49ab 100644
          } catch (IOException e) {
              Slog.e(TAG, "Error getting canonical path. Restorecon failed for " +
                      file.getPath(), e);
+diff --git a/core/java/android/os/storage/StorageManager.java b/core/java/android/os/storage/StorageManager.java
+index 2d1bb2f25d8..9e03fa3d23b 100644
+--- a/core/java/android/os/storage/StorageManager.java
++++ b/core/java/android/os/storage/StorageManager.java
+@@ -1850,7 +1850,20 @@ public class StorageManager {
+     @SuppressLint("Doclava125")
+     public void allocateBytes(FileDescriptor fd, @BytesLong long bytes,
+             @RequiresPermission @AllocateFlags int flags) throws IOException {
+-        final File file = ParcelFileDescriptor.getFile(fd);
++        final File file;
++        try {
++            file = ParcelFileDescriptor.getFile(fd);
++        } catch (IOException e) {
++            // pisces: getFile() resolves the descriptor through
++            // readlink("/proc/self/fd/N"), and on this 3.4 kernel
++            // proc_fd_access_allowed() rejects that lookup with EACCES.  This
++            // path only exists to find the volume that owns the file so the
++            // requested bytes can be pre-allocated; a failure here must not
++            // fail the caller, or every PackageInstaller write aborts with
++            // "failed to write; readlink failed: EACCES".
++            Slog.w(TAG, "allocateBytes: cannot resolve fd " + fd + ": " + e);
++            return;
++        }
+         final UUID uuid = getUuidForPath(file);
+         for (int i = 0; i < 3; i++) {
+             try {
 diff --git a/core/jni/com_android_internal_os_Zygote.cpp b/core/jni/com_android_internal_os_Zygote.cpp
 index 223af68b36b..e3a6c7265e9 100644
 --- a/core/jni/com_android_internal_os_Zygote.cpp
@@ -178,6 +204,24 @@ index 5ffa4457d98..34818da2f6a 100644
                  }
                  mRndisEnabled = usbConfigured && rndisEnabled;
              }
+diff --git a/services/core/java/com/android/server/display/DisplayPowerController.java b/services/core/java/com/android/server/display/DisplayPowerController.java
+index af4257082de..67228997734 100644
+--- a/services/core/java/com/android/server/display/DisplayPowerController.java
++++ b/services/core/java/com/android/server/display/DisplayPowerController.java
+@@ -482,7 +482,12 @@ final class DisplayPowerController implements AutomaticBrightnessController.Call
+             }
+         }
+ 
+-        mColorFadeEnabled = !ActivityManager.isLowRamDeviceStatic();
++        // pisces: the screen fade runs an EGL context switch that waits on a
++        // Tegra gralloc buffer lock; when that lock is contended the system
++        // server blocks long enough for its watchdog to kill the process, which
++        // looks like a spontaneous reboot.  This display never animates the
++        // screen on/off anyway, so keep the fade disabled.
++        mColorFadeEnabled = false;
+         mColorFadeFadesConfig = resources.getBoolean(
+                 com.android.internal.R.bool.config_animateScreenLights);
+ 
 diff --git a/services/core/java/com/android/server/media/AudioPlayerStateMonitor.java b/services/core/java/com/android/server/media/AudioPlayerStateMonitor.java
 index 648c782a7d1..19f49bb4f44 100644
 --- a/services/core/java/com/android/server/media/AudioPlayerStateMonitor.java

@@ -127,16 +127,22 @@ index a3494a280..0cf130e98 100644
      bool h64 = !access(MMAP_RND_COMPAT_PATH, F_OK);
      // supported 32-bit architecture must have 16 bits set
 diff --git a/init/selinux.cpp b/init/selinux.cpp
-index 0ba5c4ae3..5563e940a 100644
+index 0ba5c4ae3..d61485099 100644
 --- a/init/selinux.cpp
 +++ b/init/selinux.cpp
-@@ -383,6 +383,10 @@ bool LoadPolicy() {
+@@ -383,6 +383,16 @@ bool LoadPolicy() {
  
  void SelinuxInitialize() {
      Timer t;
-+    // pisces: 3.4.35 kernel cannot load Android 9 SELinux policy;
-+    // skip it so recovery can boot (TWRP runs permissive).
-+    LOG(INFO) << "SELinux initialization skipped (pisces 3.4 kernel)";
++    // pisces: the 3.4 kernel caps the policy at version 26, so the Android 9
++    // policy cannot be loaded and the system runs without one.  The rest of
++    // this function is therefore skipped, but checkreqprot must still be set:
++    // it defaults to the kernel's old value and changes how the SELinux hook
++    // evaluates execute permissions.  (deny_unknown is derived from the policy
++    // and is not writable; the kernel reports "allow" when no policy is loaded,
++    // see security_get_allow_unknown().)
++    WriteFile("/sys/fs/selinux/checkreqprot", "0");
++    LOG(INFO) << "SELinux policy load skipped (pisces 3.4 kernel)";
 +    return;
  
      LOG(INFO) << "Loading SELinux policy";
