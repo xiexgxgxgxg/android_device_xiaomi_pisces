@@ -4,7 +4,8 @@
 set -e
 [ -f kernel/ptrace.c ] || { echo "run from the kernel tree root"; exit 1; }
 
-python3 - <<'PY'
+python3 - <<'PYEOF'
+import glob
 import io
 
 # 1. kernel/ptrace.c -- allow same-thread-group introspection.
@@ -61,4 +62,19 @@ if 'if (!ss_initialized)' not in s:
     print('services.c patched')
 else:
     print('services.c already patched')
-PY
+
+# 3. defconfig -- stamp the kernel with a custom local version so uname shows
+#    e.g. 3.4.113-xiecore.  LOCALVERSION_AUTO is turned off so the stamp stays
+#    deterministic even if the tree later becomes a git checkout.
+for p in sorted(glob.glob('arch/arm/configs/tegra11_pisces_*defconfig')):
+    s = io.open(p, encoding='utf-8').read()
+    orig = s
+    s = s.replace('CONFIG_LOCALVERSION=""', 'CONFIG_LOCALVERSION="-xiecore"', 1)
+    s = s.replace('CONFIG_LOCALVERSION_AUTO=y',
+                  '# CONFIG_LOCALVERSION_AUTO is not set', 1)
+    if s != orig:
+        io.open(p, 'w', encoding='utf-8').write(s)
+        print('%s stamped -xiecore' % p)
+    else:
+        print('%s already stamped' % p)
+PYEOF
