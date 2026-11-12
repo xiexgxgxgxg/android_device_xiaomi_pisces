@@ -1,0 +1,250 @@
+diff --git a/cmds/installd/InstalldNativeService.cpp b/cmds/installd/InstalldNativeService.cpp
+index 860a68b27..0b9e8d446 100644
+--- a/cmds/installd/InstalldNativeService.cpp
++++ b/cmds/installd/InstalldNativeService.cpp
+@@ -295,47 +295,13 @@ status_t InstalldNativeService::dump(int fd, const Vector<String16> & /* args */
+  */
+ static int restorecon_app_data_lazy(const std::string& path, const std::string& seInfo, uid_t uid,
+         bool existing) {
+-    int res = 0;
+-    char* before = nullptr;
+-    char* after = nullptr;
+-
+-    // Note that SELINUX_ANDROID_RESTORECON_DATADATA flag is set by
+-    // libselinux. Not needed here.
+-
+-    if (lgetfilecon(path.c_str(), &before) < 0) {
+-        PLOG(ERROR) << "Failed before getfilecon for " << path;
+-        goto fail;
+-    }
+-    if (selinux_android_restorecon_pkgdir(path.c_str(), seInfo.c_str(), uid, 0) < 0) {
+-        PLOG(ERROR) << "Failed top-level restorecon for " << path;
+-        goto fail;
+-    }
+-    if (lgetfilecon(path.c_str(), &after) < 0) {
+-        PLOG(ERROR) << "Failed after getfilecon for " << path;
+-        goto fail;
+-    }
+-
+-    // If the initial top-level restorecon above changed the label, then go
+-    // back and restorecon everything recursively
+-    if (strcmp(before, after)) {
+-        if (existing) {
+-            LOG(DEBUG) << "Detected label change from " << before << " to " << after << " at "
+-                    << path << "; running recursive restorecon";
+-        }
+-        if (selinux_android_restorecon_pkgdir(path.c_str(), seInfo.c_str(), uid,
+-                SELINUX_ANDROID_RESTORECON_RECURSE) < 0) {
+-            PLOG(ERROR) << "Failed recursive restorecon for " << path;
+-            goto fail;
+-        }
+-    }
+-
+-    goto done;
+-fail:
+-    res = -1;
+-done:
+-    free(before);
+-    free(after);
+-    return res;
++    // pisces: the 3.4 kernel cannot load an SELinux policy, so file labels
++    // cannot be applied; make restorecon a no-op instead of failing.
++    (void)path;
++    (void)seInfo;
++    (void)uid;
++    (void)existing;
++    return 0;
+ }
+ 
+ static int restorecon_app_data_lazy(const std::string& parent, const char* name,
+@@ -974,6 +940,14 @@ binder::Status InstalldNativeService::destroyUserData(const std::unique_ptr<std:
+     CHECK_ARGUMENT_UUID(uuid);
+     std::lock_guard<std::recursive_mutex> lock(mLock);
+ 
++    // pisces: something keeps requesting a user-0 data wipe during boot, which
++    // deletes /data/data and restarts the whole boot loop. Never destroy the
++    // primary user's data.
++    if (userId == 0) {
++        LOG(WARNING) << "refusing to destroy data of primary user 0";
++        return ok();
++    }
++
+     const char* uuid_ = uuid ? uuid->c_str() : nullptr;
+     binder::Status res = ok();
+     if (flags & FLAG_STORAGE_DE) {
+diff --git a/cmds/servicemanager/service_manager.c b/cmds/servicemanager/service_manager.c
+index 6b340a8d3..3a11cc1fd 100644
+--- a/cmds/servicemanager/service_manager.c
++++ b/cmds/servicemanager/service_manager.c
+@@ -63,6 +63,9 @@ static struct selabel_handle* sehandle;
+ 
+ static bool check_mac_perms(pid_t spid, uid_t uid, const char *tctx, const char *perm, const char *name)
+ {
++    /* pisces: no SELinux policy can be loaded on the 3.4 kernel. */
++    return true;
++
+     char *sctx = NULL;
+     const char *class = "service_manager";
+     bool allowed;
+diff --git a/libs/ui/Gralloc2.cpp b/libs/ui/Gralloc2.cpp
+index 918251f9d..c3057e941 100644
+--- a/libs/ui/Gralloc2.cpp
++++ b/libs/ui/Gralloc2.cpp
+@@ -20,6 +20,11 @@
+ #include <hwbinder/IPCThreadState.h>
+ #include <ui/Gralloc2.h>
+ 
++#include <hardware/gralloc.h>
++#include <hardware/hardware.h>
++
++#include <mutex>
++
+ #include <inttypes.h>
+ #include <log/log.h>
+ #pragma clang diagnostic push
+@@ -339,6 +344,53 @@ std::string Allocator::dumpDebugInfo() const
+     return debugInfo;
+ }
+ 
++Error Allocator::allocateLocally(const IMapper::BufferDescriptorInfo& info,
++        uint32_t count, uint32_t* outStride, buffer_handle_t* outBufferHandles) const {
++    static std::mutex mutex;
++    static alloc_device_t* device = nullptr;
++
++    std::lock_guard<std::mutex> lock(mutex);
++    if (device == nullptr) {
++        gralloc_module_t const* module = nullptr;
++        if (hw_get_module(GRALLOC_HARDWARE_MODULE_ID,
++                reinterpret_cast<const hw_module_t**>(&module)) != 0) {
++            ALOGE("pisces: local gralloc module not found");
++            return Error::NO_RESOURCES;
++        }
++        alloc_device_t* dev = nullptr;
++        if (gralloc_open(reinterpret_cast<const hw_module_t*>(module), &dev) != 0 ||
++                dev == nullptr) {
++            ALOGE("pisces: local gralloc open failed");
++            return Error::NO_RESOURCES;
++        }
++        device = dev;
++    }
++
++    uint32_t stride = 0;
++    for (uint32_t i = 0; i < count; i++) {
++        buffer_handle_t handle = nullptr;
++        int s = 0;
++        int res = device->alloc(device, static_cast<int>(info.width),
++                static_cast<int>(info.height),
++                static_cast<int>(info.format), static_cast<int>(info.usage),
++                &handle, &s);
++        if (res != 0 || handle == nullptr) {
++            ALOGE("pisces: local gralloc alloc failed: %d", res);
++            return Error::NO_RESOURCES;
++        }
++        stride = static_cast<uint32_t>(s);
++        Error error = mMapper.importBuffer(handle, &outBufferHandles[i]);
++        if (error != Error::NONE) {
++            ALOGE("pisces: local import failed: %d", error);
++            device->free(device, handle);
++            outBufferHandles[i] = nullptr;
++            return error;
++        }
++    }
++    *outStride = stride;
++    return Error::NONE;
++}
++
+ Error Allocator::allocate(BufferDescriptor descriptor, uint32_t count,
+         uint32_t* outStride, buffer_handle_t* outBufferHandles) const
+ {
+@@ -347,6 +399,7 @@ Error Allocator::allocate(BufferDescriptor descriptor, uint32_t count,
+             [&](const auto& tmpError, const auto& tmpStride,
+                 const auto& tmpBuffers) {
+                 error = tmpError;
++                ALOGE("pisces: IAllocator::allocate tmpError=%d", tmpError);
+                 if (tmpError != Error::NONE) {
+                     return;
+                 }
+@@ -355,6 +408,7 @@ Error Allocator::allocate(BufferDescriptor descriptor, uint32_t count,
+                 for (uint32_t i = 0; i < count; i++) {
+                     error = mMapper.importBuffer(tmpBuffers[i],
+                             &outBufferHandles[i]);
++                    ALOGE("pisces: importBuffer[%u] error=%d", i, error);
+                     if (error != Error::NONE) {
+                         for (uint32_t j = 0; j < i; j++) {
+                             mMapper.freeBuffer(outBufferHandles[j]);
+@@ -370,6 +424,8 @@ Error Allocator::allocate(BufferDescriptor descriptor, uint32_t count,
+     // make sure the kernel driver sees BC_FREE_BUFFER and closes the fds now
+     hardware::IPCThreadState::self()->flushCommands();
+ 
++    ALOGE("pisces: hidl retOk=%d error=%d desc=%s", ret.isOk(), static_cast<int>(error),
++          ret.description().c_str());
+     return (ret.isOk()) ? error : kTransactionError;
+ }
+ 
+diff --git a/libs/ui/GraphicBufferAllocator.cpp b/libs/ui/GraphicBufferAllocator.cpp
+index eaba1ed1a..f04784fa6 100644
+--- a/libs/ui/GraphicBufferAllocator.cpp
++++ b/libs/ui/GraphicBufferAllocator.cpp
+@@ -98,6 +98,8 @@ status_t GraphicBufferAllocator::allocate(uint32_t width, uint32_t height,
+         uint64_t /*graphicBufferId*/, std::string requestorName)
+ {
+     ATRACE_CALL();
++    ALOGE("pisces: GBA::allocate enter %ux%u usage=%llx", width, height,
++          static_cast<unsigned long long>(usage));
+ 
+     // make sure to not allocate a N x 0 or 0 x N buffer, since this is
+     // allowed from an API stand-point allocate a 1x1 buffer instead.
+@@ -115,6 +117,11 @@ status_t GraphicBufferAllocator::allocate(uint32_t width, uint32_t height,
+     info.format = static_cast<Gralloc2::PixelFormat>(format);
+     info.usage = usage;
+ 
++    // pisces: EGL window surfaces need texture-capable buffers; the legacy
++    // gralloc also re-imports this variant more reliably.
++    if ((info.usage & 0x900) == 0x900) {
++        info.usage |= 0x200;  // HW_TEXTURE
++    }
+     Gralloc2::Error error = mAllocator->allocate(info, stride, handle);
+     if (error == Gralloc2::Error::NONE) {
+         Mutex::Autolock _l(sLock);
+diff --git a/libs/ui/include/ui/Gralloc2.h b/libs/ui/include/ui/Gralloc2.h
+index 5a8dbda5d..0c855b01b 100644
+--- a/libs/ui/include/ui/Gralloc2.h
++++ b/libs/ui/include/ui/Gralloc2.h
+@@ -115,6 +115,13 @@ public:
+     Error allocate(const IMapper::BufferDescriptorInfo& descriptorInfo, uint32_t count,
+             uint32_t* outStride, buffer_handle_t* outBufferHandles) const
+     {
++        // pisces: the legacy gralloc's cross-process import is unreliable, so
++        // allocate with the local gralloc0 module and register the buffer in
++        // this process first.
++        Error local = allocateLocally(descriptorInfo, count, outStride, outBufferHandles);
++        if (local == Error::NONE) {
++            return local;
++        }
+         BufferDescriptor descriptor;
+         Error error = mMapper.createDescriptor(descriptorInfo, &descriptor);
+         if (error == Error::NONE) {
+@@ -129,6 +136,10 @@ public:
+         return allocate(descriptorInfo, 1, outStride, outBufferHandle);
+     }
+ 
++    Error allocateLocally(const IMapper::BufferDescriptorInfo& descriptorInfo,
++            uint32_t count, uint32_t* outStride,
++            buffer_handle_t* outBufferHandles) const;
++
+ private:
+     const Mapper& mMapper;
+     sp<IAllocator> mAllocator;
+diff --git a/opengl/libs/EGL/Loader.cpp b/opengl/libs/EGL/Loader.cpp
+index 7f769114e..322923516 100644
+--- a/opengl/libs/EGL/Loader.cpp
++++ b/opengl/libs/EGL/Loader.cpp
+@@ -296,7 +296,7 @@ void Loader::init_api(void* dso,
+             }
+         }
+         if (f == NULL) {
+-            //ALOGD("%s", name);
++            ALOGE("pisces: missing GL/EGL entry point: %s", name);
+             f = (__eglMustCastToProperFunctionPointerType)gl_unimplemented;
+ 
+             /*

@@ -137,10 +137,11 @@ on early-boot
     start atmel_fw
 
 on init
-    # pisces: the vendor HCD download in libbt hangs the BCM43341 (it stops
-    # answering HCI at any baud until BT_REG_ON is power cycled), and the chip
-    # speaks HCI fine on its ROM firmware.  hardware.c honours this property.
-    setprop persist.pisces.bt.skip_fw 1
+    # pisces: load the BCM43341 patchram firmware (bcm43341.hcd).  Without it
+    # the chip runs its ROM firmware, which rejects the Broadcom BLE scan
+    # filter commands ("bte_scan_filt_param_cfg_evt, 1") and discovery finds
+    # nothing.  The download now completes in ~1.5 s without hanging the chip.
+    setprop persist.pisces.bt.skip_fw 0
 
 
 
@@ -264,9 +265,12 @@ on boot
     chown bluetooth net_bt_stack /dev/ttyHS2
 
     # power up/down interface
+    # pisces: init is neverallowed to write sysfs (AOSP neverallow init
+    # sysfs:file { open read write }), so the power state is toggled by the
+    # bluetooth HAL through set_bluetooth_power(); init only fixes the node
+    # ownership so the bluetooth user can open it.
     chmod 0660 /sys/class/rfkill/rfkill0/state
     chmod 0660 /sys/class/rfkill/rfkill0/type
-    write /sys/class/rfkill/rfkill0/state 0
     chown bluetooth net_bt_stack /sys/class/rfkill/rfkill0/state
     chown bluetooth net_bt_stack /sys/class/rfkill/rfkill0/type
 
@@ -394,6 +398,9 @@ on boot
     write /sys/devices/system/cpu/cpuquiet/tegra_cpuquiet/down_delay 500
     write /sys/devices/system/cpu/cpuquiet/tegra_cpuquiet/enable 1
     write /sys/devices/system/cpu/cpuquiet/current_governor runnable
+    # pisces: CPU power gating in idle never comes back on this 3.4 kernel --
+    # the core is powered down and the wakeup is lost (hard hang, the PMIC's
+    # long press then powers the phone off).  Keep it disabled.
     write /sys/module/cpuidle_t11x/parameters/cpu_power_gating_in_idle 31
     write /sys/module/cpuidle_t11x/parameters/slow_cluster_power_gating_noncpu 1
     write /sys/module/cpuidle/parameters/power_down_in_idle 1
@@ -680,7 +687,7 @@ service ril-daemon /vendor/bin/hw/rild
     group radio cache inet misc audio log readproc wakelock
     socket rild stream 660 root radio
     socket rild-debug stream 660 radio system
-    setenv LD_PRELOAD /system/lib/libpisces_rilshim.so
+    setenv LD_PRELOAD /vendor/lib/libpisces_rilshim.so
 
 # pisces: the stock rc starts this HAL with "group wifi gps".  With
 # CONFIG_ANDROID_PARANOID_NETWORK the socket(AF_INET) it needs is denied
@@ -795,19 +802,44 @@ service charger /sbin/chargeonlymode
     user root
     group root
 
+# pisces: the 2013 camera HAL floods logcat with NvRmReg debug lines, which
+# rotates the 256K ring buffer within seconds and hides whatever the camera
+# actually failed on.  Give logd more room before it starts.
+on early-init
+    setprop persist.logd.size 8M
+
 # pisces: bluedroid_pm exposes the BCM43341 power switch as rfkill0 and it
 # comes up blocked, so the controller never answers on the UART.
 on boot
-    write /sys/class/rfkill/rfkill0/state 1
+    # the bluetooth HAL powers the chip on when the stack starts
+    # pisces: nvmap/nvhost nodes are created before ueventd is up, so they keep
+    # the default devtmpfs label and both surfaceflinger and gralloc fail to
+    # open them under enforcing.
+    restorecon -R /dev
 
 # pisces: the A9 Bluetooth HAL aborts with "Open: No Bluetooth Address!" when
 # /data/misc/bluetooth/bdaddr is missing; the factory address ships next to the
 # BT config files.
 on post-fs-data
+    # files created before SELinux ever ran (the pre-policy era of this port)
+    # carry no label, which leaves adbd unable to read its keys and the
+    # framework unable to read app data.  Relabel the important corners.
+    # the system image was built before the USB gadget HAL got its own exec
+    # type, so its baked label is vendor_file and init refuses to exec it
+    restorecon /vendor/bin/hw/android.hardware.usb.gadget@1.0-service.pisces
+    restorecon -R /data/misc/adb
+    restorecon -R /data/misc/bluetooth
+    restorecon -R /data/system
     mkdir /data/misc/bluetooth 0770 bluetooth bluetooth
     # pisces: the camera wrapper (provider, uid media) caches per-sensor
     # parameter blobs here and cameraserver reads them back
     mkdir /data/misc/pisces_camera 0770 media cameraserver
+    # the directory (and the nvcam_cache_*.bin files inside it) were created
+    # before the camera_data_file label existed, so they still carry
+    # system_data_file and the camera HAL gets "avc: denied { read write }
+    # name=nvcam_cache_0.bin"
+    restorecon -R /data/misc/pisces_camera
+    restorecon -R /data/misc/camera
     copy /system/etc/bluetooth/bdaddr /data/misc/bluetooth/bdaddr
     chown bluetooth bluetooth /data/misc/bluetooth/bdaddr
     chmod 0660 /data/misc/bluetooth/bdaddr
@@ -883,7 +915,9 @@ service immvibed /system/bin/immvibed
     group system
     oneshot
 
-service pisces_cpu /system/bin/sh /pisces_cpu.sh
+# pisces: the tuning itself is a C binary now; init may not exec /system/bin/sh
+# under SELinux enforcing, which left the CPU parked on one core at 1.02 GHz.
+service pisces_cpu /system/bin/pisces_cpu
     class main
     user root
     group root system
@@ -1027,7 +1061,11 @@ on post-fs-data
     exec /system/bin/sh -c "cat /proc/last_kmsg > /cache/last_kmsg.txt 2>/dev/null"
     start userdirs
 
-service audience_fw /system/bin/sh /system/bin/load_audience_fw.sh --log
+# pisces: run vpcmd directly (no /system/bin/sh wrapper): init is not allowed to
+# execute shell under enforcing, which silently skipped the ES325 firmware
+# download.  The script only checked /sys/esxxx/uart_download and forwarded
+# these exact arguments.
+service audience_fw /system/bin/vpcmd -lh /etc/firmware/audience-es325-fw-init.bin /etc/firmware/audience-es325-fw.bin 3000000
     class core
     user root
     group root system
@@ -1040,3 +1078,11 @@ service atmel_fw /system/bin/sh /system/bin/atmel_fw_update.sh
     group root system
     oneshot
     disabled
+
+
+# PISCES-ENFORCE-EXPERIMENT: boot permissive (so the display comes up), then turn
+# enforcement on at the very end.  Whatever breaks the GPU can then be seen in
+# the log at exactly that moment.
+# SELinux is enforcing from the very first second (androidboot.selinux=enforcing
+# in BoardConfig.mk); the old "boot permissive, enforce at boot_completed" hack
+# is gone.  Every service that used to rely on it now has its own domain.

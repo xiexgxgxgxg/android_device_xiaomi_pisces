@@ -1,0 +1,592 @@
+diff --git a/core/java/android/app/ContextImpl.java b/core/java/android/app/ContextImpl.java
+index 95117862a8d..b9172978a75 100644
+--- a/core/java/android/app/ContextImpl.java
++++ b/core/java/android/app/ContextImpl.java
+@@ -812,6 +812,14 @@ class ContextImpl extends Context {
+             }
+         } else {
+             dir = getDatabasesDir();
++            // pisces: vold does not create per-user DE/CE directories yet,
++            // so make sure the databases dir exists before SQLite opens it.
++            if (!dir.isDirectory()) {
++                dir.mkdirs();
++                FileUtils.setPermissions(dir.getPath(),
++                    FileUtils.S_IRWXU|FileUtils.S_IRWXG|FileUtils.S_IXOTH,
++                    -1, -1);
++            }
+             f = makeFilename(dir, name);
+         }
+ 
+diff --git a/core/java/android/os/SELinux.java b/core/java/android/os/SELinux.java
+index 2773da54b00..003cdef49ab 100644
+--- a/core/java/android/os/SELinux.java
++++ b/core/java/android/os/SELinux.java
+@@ -114,7 +114,17 @@ public class SELinux {
+      */
+     public static boolean restorecon(String pathname) throws NullPointerException {
+         if (pathname == null) { throw new NullPointerException(); }
+-        return native_restorecon(pathname, 0);
++        if (!native_restorecon(pathname, 0)) {
++            // pisces: the 3.4 kernel cannot load the Android 9 policy, so no
++            // filesystem here supports security.* xattrs and every restorecon
++            // fails with EOPNOTSUPP.  We run permissive (nothing enforces the
++            // labels), so report success instead of failing the caller - an
++            // install, for instance, would otherwise abort with
++            // "INSTALL_FAILED_INSUFFICIENT_STORAGE: Failed rename".
++            Slog.w(TAG, "restorecon(" + pathname + ") failed, no SELinux policy (pisces)");
++            return true;
++        }
++        return true;
+     }
+ 
+     /**
+@@ -142,7 +152,7 @@ public class SELinux {
+      */
+     public static boolean restorecon(File file) throws NullPointerException {
+         try {
+-            return native_restorecon(file.getCanonicalPath(), 0);
++            return restorecon(file.getCanonicalPath());
+         } catch (IOException e) {
+             Slog.e(TAG, "Error getting canonical path. Restorecon failed for " +
+                     file.getPath(), e);
+@@ -160,7 +170,12 @@ public class SELinux {
+      */
+     public static boolean restoreconRecursive(File file) {
+         try {
+-            return native_restorecon(file.getCanonicalPath(), SELINUX_ANDROID_RESTORECON_RECURSE);
++            final String path = file.getCanonicalPath();
++            if (!native_restorecon(path, SELINUX_ANDROID_RESTORECON_RECURSE)) {
++                Slog.w(TAG, "restoreconRecursive(" + path
++                        + ") failed, no SELinux policy (pisces)");
++            }
++            return true;
+         } catch (IOException e) {
+             Slog.e(TAG, "Error getting canonical path. Restorecon failed for " +
+                     file.getPath(), e);
+diff --git a/core/java/android/os/storage/StorageManager.java b/core/java/android/os/storage/StorageManager.java
+index 2d1bb2f25d8..9e03fa3d23b 100644
+--- a/core/java/android/os/storage/StorageManager.java
++++ b/core/java/android/os/storage/StorageManager.java
+@@ -1850,7 +1850,20 @@ public class StorageManager {
+     @SuppressLint("Doclava125")
+     public void allocateBytes(FileDescriptor fd, @BytesLong long bytes,
+             @RequiresPermission @AllocateFlags int flags) throws IOException {
+-        final File file = ParcelFileDescriptor.getFile(fd);
++        final File file;
++        try {
++            file = ParcelFileDescriptor.getFile(fd);
++        } catch (IOException e) {
++            // pisces: getFile() resolves the descriptor through
++            // readlink("/proc/self/fd/N"), and on this 3.4 kernel
++            // proc_fd_access_allowed() rejects that lookup with EACCES.  This
++            // path only exists to find the volume that owns the file so the
++            // requested bytes can be pre-allocated; a failure here must not
++            // fail the caller, or every PackageInstaller write aborts with
++            // "failed to write; readlink failed: EACCES".
++            Slog.w(TAG, "allocateBytes: cannot resolve fd " + fd + ": " + e);
++            return;
++        }
+         final UUID uuid = getUuidForPath(file);
+         for (int i = 0; i < 3; i++) {
+             try {
+diff --git a/core/jni/com_android_internal_os_Zygote.cpp b/core/jni/com_android_internal_os_Zygote.cpp
+index 223af68b36b..e3a6c7265e9 100644
+--- a/core/jni/com_android_internal_os_Zygote.cpp
++++ b/core/jni/com_android_internal_os_Zygote.cpp
+@@ -676,6 +676,13 @@ static pid_t ForkAndSpecializeCommon(JNIEnv* env, uid_t uid, gid_t gid, jintArra
+         }
+     }
+ 
++    // pisces: init starts every service with umask(077), so app-created files
++    // end up 0600 and nobody else can read them.  Without sdcardfs there is no
++    // per-app storage layer that maps ownership, so use the classic 022 umask
++    // instead: new files are 0644 and the camera's photos can be read by the
++    // media provider and the gallery.
++    umask(0022);
++
+     std::string error_msg;
+     if (!SetGids(env, javaGids, &error_msg)) {
+       fail_fn(error_msg);
+@@ -745,9 +752,11 @@ static pid_t ForkAndSpecializeCommon(JNIEnv* env, uid_t uid, gid_t gid, jintArra
+         }
+     }
+     rc = selinux_android_setcontext(uid, is_system_server, se_info_c_str, se_name_c_str);
++    // pisces: no SELinux policy can be loaded on the 3.4 kernel, so setting
++    // the process context always fails. Keep going instead of aborting.
+     if (rc == -1) {
+-      fail_fn(CREATE_ERROR("selinux_android_setcontext(%d, %d, \"%s\", \"%s\") failed", uid,
+-            is_system_server, se_info_c_str, se_name_c_str));
++      ALOGW("selinux_android_setcontext(%d, %d) failed, continuing without SELinux",
++            uid, is_system_server);
+     }
+ 
+     // Make it easier to debug audit logs by setting the main thread's name to the
+diff --git a/keystore/java/android/security/KeyStore.java b/keystore/java/android/security/KeyStore.java
+index 6be2da24e63..ea55933b048 100644
+--- a/keystore/java/android/security/KeyStore.java
++++ b/keystore/java/android/security/KeyStore.java
+@@ -177,7 +177,12 @@ public class KeyStore {
+             case NO_ERROR: return State.UNLOCKED;
+             case LOCKED: return State.LOCKED;
+             case UNINITIALIZED: return State.UNINITIALIZED;
+-            default: throw new AssertionError(mError);
++            default:
++                // pisces: without an SELinux policy keystore rejects the unlock
++                // permission check; do not crash the framework over it.
++                Log.w(TAG, "state(" + userId + ") failed with " + mError
++                        + ", assuming UNLOCKED");
++                return State.UNLOCKED;
+         }
+     }
+ 
+diff --git a/media/java/android/media/AudioManager.java b/media/java/android/media/AudioManager.java
+index d138c942d54..2a2296b3983 100644
+--- a/media/java/android/media/AudioManager.java
++++ b/media/java/android/media/AudioManager.java
+@@ -4166,8 +4166,13 @@ public class AudioManager {
+      * @hide
+      */
+     public int getRingerModeInternal() {
++        IAudioService service = getService();
++        // pisces: AudioService can be absent while audio bring-up is ongoing.
++        if (service == null) {
++            return RINGER_MODE_NORMAL;
++        }
+         try {
+-            return getService().getRingerModeInternal();
++            return service.getRingerModeInternal();
+         } catch (RemoteException e) {
+             throw e.rethrowFromSystemServer();
+         }
+diff --git a/media/java/android/media/MediaRouter.java b/media/java/android/media/MediaRouter.java
+index 70ab8632a88..a58677c7645 100644
+--- a/media/java/android/media/MediaRouter.java
++++ b/media/java/android/media/MediaRouter.java
+@@ -161,9 +161,12 @@ public class MediaRouter {
+             mDisplayService.registerDisplayListener(this, mHandler);
+ 
+             AudioRoutesInfo newAudioRoutes = null;
+-            try {
+-                newAudioRoutes = mAudioService.startWatchingRoutes(mAudioRoutesObserver);
+-            } catch (RemoteException e) {
++            // pisces: AudioService may be unavailable during bring-up.
++            if (mAudioService != null) {
++                try {
++                    newAudioRoutes = mAudioService.startWatchingRoutes(mAudioRoutesObserver);
++                } catch (RemoteException e) {
++                }
+             }
+             if (newAudioRoutes != null) {
+                 // This will select the active BT route if there is one and the current
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/policy/FlashlightControllerImpl.java b/packages/SystemUI/src/com/android/systemui/statusbar/policy/FlashlightControllerImpl.java
+index f0cfa2c4093..d02c845e1b2 100644
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/policy/FlashlightControllerImpl.java
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/policy/FlashlightControllerImpl.java
+@@ -18,6 +18,7 @@ package com.android.systemui.statusbar.policy;
+ 
+ import android.content.Context;
+ import android.content.pm.PackageManager;
++import android.hardware.Camera;
+ import android.hardware.camera2.CameraAccessException;
+ import android.hardware.camera2.CameraCharacteristics;
+ import android.hardware.camera2.CameraManager;
+@@ -60,6 +61,16 @@ public class FlashlightControllerImpl implements FlashlightController {
+     private String mCameraId;
+     private boolean mTorchAvailable;
+ 
++    /**
++     * pisces: the camera HAL is a CAMERA_MODULE_API_VERSION_1_0 blob, so the
++     * framework refuses setTorchMode() ("Torch is not supported") and there
++     * is no camera2 flash unit to find in getCameraId().  Fall back to the
++     * legacy Camera API, whose "flash-mode=torch" parameter the pisces camera
++     * wrapper already implements by driving /sys/class/leds/flashlight.
++     */
++    private boolean mLegacyTorch;
++    private Camera mLegacyCamera;
++
+     public FlashlightControllerImpl(Context context) {
+         mContext = context;
+         mCameraManager = (CameraManager) mContext.getSystemService(Context.CAMERA_SERVICE);
+@@ -71,7 +82,18 @@ public class FlashlightControllerImpl implements FlashlightController {
+         try {
+             mCameraId = getCameraId();
+         } catch (Throwable e) {
+-            Log.e(TAG, "Couldn't initialize.", e);
++            /* A camera HAL with CAMERA_MODULE_API_VERSION_1_0 has no camera2
++             * flash metadata to enumerate, and getCameraCharacteristics() can
++             * throw for it.  Do not give up here: fall through to the legacy
++             * Camera API path below. */
++            Log.e(TAG, "couldn't query the camera2 flash unit", e);
++            mCameraId = null;
++        }
++
++        if (mCameraId == null && hasFlashlight()) {
++            mLegacyTorch = true;
++            mTorchAvailable = true;
++            Log.i(TAG, "using the legacy camera torch (no camera2 flash unit)");
+             return;
+         }
+ 
+@@ -82,6 +104,10 @@ public class FlashlightControllerImpl implements FlashlightController {
+     }
+ 
+     public void setFlashlight(boolean enabled) {
++        if (mLegacyTorch) {
++            setLegacyFlashlight(enabled);
++            return;
++        }
+         boolean pendingError = false;
+         synchronized (this) {
+             if (mCameraId == null) return;
+@@ -102,6 +128,63 @@ public class FlashlightControllerImpl implements FlashlightController {
+         }
+     }
+ 
++    /**
++     * Legacy (camera API 1) torch: open camera 0, set flash-mode=torch and keep
++     * the device open while the LED is on, exactly like the pre-camera2
++     * framework did.  The camera wrapper turns the LED off again in its
++     * release() path, so an abrupt release() still leaves the flash off.
++     */
++    private void setLegacyFlashlight(boolean enabled) {
++        boolean pendingError = false;
++        synchronized (this) {
++            if (enabled == mFlashlightEnabled) {
++                return;
++            }
++            try {
++                if (enabled) {
++                    Camera camera = Camera.open(0);
++                    if (camera == null) {
++                        throw new RuntimeException("Camera.open(0) returned null");
++                    }
++                    Camera.Parameters params = camera.getParameters();
++                    params.setFlashMode(Camera.Parameters.FLASH_MODE_TORCH);
++                    camera.setParameters(params);
++                    mLegacyCamera = camera;
++                    Log.i(TAG, "legacy torch on");
++                } else {
++                    releaseLegacyCameraLocked();
++                }
++                mFlashlightEnabled = enabled;
++            } catch (RuntimeException e) {
++                Log.e(TAG, "couldn't set the legacy torch", e);
++                releaseLegacyCameraLocked();
++                mFlashlightEnabled = false;
++                pendingError = true;
++            }
++        }
++        dispatchModeChanged(mFlashlightEnabled);
++        if (pendingError) {
++            dispatchError();
++        }
++    }
++
++    private void releaseLegacyCameraLocked() {
++        Camera camera = mLegacyCamera;
++        mLegacyCamera = null;
++        if (camera == null) {
++            return;
++        }
++        try {
++            Camera.Parameters params = camera.getParameters();
++            params.setFlashMode(Camera.Parameters.FLASH_MODE_OFF);
++            camera.setParameters(params);
++        } catch (RuntimeException e) {
++            Log.w(TAG, "couldn't turn the legacy torch off cleanly", e);
++        }
++        camera.release();
++        Log.i(TAG, "legacy torch off");
++    }
++
+     public boolean hasFlashlight() {
+         return mContext.getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA_FLASH);
+     }
+diff --git a/services/core/java/com/android/server/connectivity/Tethering.java b/services/core/java/com/android/server/connectivity/Tethering.java
+index 5ffa4457d98..34818da2f6a 100644
+--- a/services/core/java/com/android/server/connectivity/Tethering.java
++++ b/services/core/java/com/android/server/connectivity/Tethering.java
+@@ -907,12 +907,16 @@ public class Tethering extends BaseNetworkObserver {
+             //
+             // For more explanation, see b/62552150 .
+             synchronized (Tethering.this.mPublicSync) {
+-                if (!usbConnected && mRndisEnabled) {
+-                    // Turn off tethering if it was enabled and there is a disconnect.
+-                    tetherMatchingInterfaces(IControlsTethering.STATE_AVAILABLE, TETHERING_USB);
+-                } else if (usbConfigured && rndisEnabled) {
+-                    // Tether if rndis is enabled and usb is configured.
++                /* pisces: this board uses the legacy android_usb gadget, whose
++                 * USB_CONNECTED/USB_CONFIGURED flags do not settle in the order
++                 * this code expects - Tethering kept taking the "disconnected"
++                 * branch and actively UNtethered the interface it had just been
++                 * asked to tether.  Drive the state from the rndis function
++                 * instead: rndis on -> tether, rndis off -> untether. */
++                if (rndisEnabled) {
+                     tetherMatchingInterfaces(IControlsTethering.STATE_TETHERED, TETHERING_USB);
++                } else if (mRndisEnabled) {
++                    tetherMatchingInterfaces(IControlsTethering.STATE_AVAILABLE, TETHERING_USB);
+                 }
+                 mRndisEnabled = usbConfigured && rndisEnabled;
+             }
+diff --git a/services/core/java/com/android/server/display/DisplayPowerController.java b/services/core/java/com/android/server/display/DisplayPowerController.java
+index af4257082de..67228997734 100644
+--- a/services/core/java/com/android/server/display/DisplayPowerController.java
++++ b/services/core/java/com/android/server/display/DisplayPowerController.java
+@@ -482,7 +482,12 @@ final class DisplayPowerController implements AutomaticBrightnessController.Call
+             }
+         }
+ 
+-        mColorFadeEnabled = !ActivityManager.isLowRamDeviceStatic();
++        // pisces: the screen fade runs an EGL context switch that waits on a
++        // Tegra gralloc buffer lock; when that lock is contended the system
++        // server blocks long enough for its watchdog to kill the process, which
++        // looks like a spontaneous reboot.  This display never animates the
++        // screen on/off anyway, so keep the fade disabled.
++        mColorFadeEnabled = false;
+         mColorFadeFadesConfig = resources.getBoolean(
+                 com.android.internal.R.bool.config_animateScreenLights);
+ 
+diff --git a/services/core/java/com/android/server/media/AudioPlayerStateMonitor.java b/services/core/java/com/android/server/media/AudioPlayerStateMonitor.java
+index 648c782a7d1..19f49bb4f44 100644
+--- a/services/core/java/com/android/server/media/AudioPlayerStateMonitor.java
++++ b/services/core/java/com/android/server/media/AudioPlayerStateMonitor.java
+@@ -276,6 +276,10 @@ class AudioPlayerStateMonitor extends IPlaybackConfigDispatcher.Stub {
+     }
+ 
+     public void registerSelfIntoAudioServiceIfNeeded(IAudioService audioService) {
++        // pisces: AudioService may be disabled during bring-up.
++        if (audioService == null) {
++            return;
++        }
+         synchronized (mLock) {
+             try {
+                 if (!mRegisteredToAudioService) {
+diff --git a/services/core/java/com/android/server/media/MediaRouterService.java b/services/core/java/com/android/server/media/MediaRouterService.java
+index a7df0e23f63..1a62587d632 100644
+--- a/services/core/java/com/android/server/media/MediaRouterService.java
++++ b/services/core/java/com/android/server/media/MediaRouterService.java
+@@ -169,6 +169,10 @@ public final class MediaRouterService extends IMediaRouterService.Stub
+         mAudioPlayerStateMonitor.registerSelfIntoAudioServiceIfNeeded(mAudioService);
+ 
+         AudioRoutesInfo audioRoutes = null;
++        // pisces: AudioService may be disabled during bring-up.
++        if (mAudioService == null) {
++            return;
++        }
+         try {
+             audioRoutes = mAudioService.startWatchingRoutes(new IAudioRoutesObserver.Stub() {
+                 @Override
+diff --git a/services/core/java/com/android/server/pm/PackageInstallerService.java b/services/core/java/com/android/server/pm/PackageInstallerService.java
+index 5df53551b84..6cb810e2541 100644
+--- a/services/core/java/com/android/server/pm/PackageInstallerService.java
++++ b/services/core/java/com/android/server/pm/PackageInstallerService.java
+@@ -692,7 +692,12 @@ public class PackageInstallerService extends IPackageInstaller.Stub {
+         }
+ 
+         if (!SELinux.restorecon(stageDir)) {
+-            throw new IOException("Failed to restorecon session dir: " + stageDir);
++            // pisces: the 3.4 kernel cannot load the Android 9 SELinux policy,
++            // so no filesystem supports security.* xattrs and restorecon always
++            // fails (EOPNOTSUPP).  We run permissive, where labels are not
++            // enforced, so carry on instead of failing every installation.
++            Slog.w(TAG, "Failed to restorecon session dir: " + stageDir
++                    + "; continuing without SELinux policy (pisces)");
+         }
+     }
+ 
+diff --git a/services/core/java/com/android/server/policy/PhoneWindowManager.java b/services/core/java/com/android/server/policy/PhoneWindowManager.java
+index ef8fb37aa37..e1d9bb48370 100644
+--- a/services/core/java/com/android/server/policy/PhoneWindowManager.java
++++ b/services/core/java/com/android/server/policy/PhoneWindowManager.java
+@@ -6613,6 +6613,23 @@ public class PhoneWindowManager implements WindowManagerPolicy {
+ 
+ 
+     /** {@inheritDoc} */
++    private static boolean isPiscesHardwareNavKey(int keyCode) {
++        switch (keyCode) {
++            case KeyEvent.KEYCODE_HOME:
++            case KeyEvent.KEYCODE_BACK:
++            case KeyEvent.KEYCODE_MENU:
++            case KeyEvent.KEYCODE_APP_SWITCH:
++                return true;
++            default:
++                return false;
++        }
++    }
++
++    private boolean isPiscesNavBarForced() {
++        return LineageSettings.System.getIntForUser(mContext.getContentResolver(),
++                LineageSettings.System.FORCE_SHOW_NAVBAR, 0, UserHandle.USER_CURRENT) != 0;
++    }
++
+     @Override
+     public int interceptKeyBeforeQueueing(KeyEvent event, int policyFlags) {
+         if (!mSystemBooted) {
+@@ -6627,6 +6644,18 @@ public class PhoneWindowManager implements WindowManagerPolicy {
+ 
+         final boolean isInjected = (policyFlags & WindowManagerPolicy.FLAG_INJECTED) != 0;
+ 
++        // pisces: when the on-screen navigation bar is forced on (Settings > System
++        // > Buttons -> "Enable on-screen nav bar"), the capacitive menu/home/back
++        // keys are redundant - swallow them so only the navigation bar is used.
++        // Turning the switch off brings the hardware keys back.
++        //
++        // Only swallow events that come from a real input device: the navigation
++        // bar's own buttons (KeyButtonView) inject their key events, and those
++        // must keep working, otherwise enabling the bar leaves it dead.
++        if (isPiscesHardwareNavKey(keyCode) && isPiscesNavBarForced() && !isInjected) {
++            return 0;
++        }
++
+         // If screen is off then we treat the case where the keyguard is open but hidden
+         // the same as if it were open and in front.
+         // This will prevent any keys other than the power button from waking the screen
+diff --git a/services/core/java/com/android/server/wm/TaskSnapshotController.java b/services/core/java/com/android/server/wm/TaskSnapshotController.java
+index 733a2486215..7fac3503b3f 100644
+--- a/services/core/java/com/android/server/wm/TaskSnapshotController.java
++++ b/services/core/java/com/android/server/wm/TaskSnapshotController.java
+@@ -165,7 +165,19 @@ class TaskSnapshotController {
+         mSkipClosingAppSnapshotTasks.addAll(tasks);
+     }
+ 
++    // pisces: the real snapshot capture goes through
++    // SurfaceComposer::captureLayers, which on this device can block for a long
++    // time while it holds the window map lock - the whole system then waits on
++    // it until the watchdog kills system_server.  Skip the capture and let the
++    // recents UI fall back to the app icon.
++    private static boolean piscesSkipSnapshots() {
++        return android.os.SystemProperties.getBoolean("persist.pisces.no_task_snapshots", false);
++    }
++
+     void snapshotTasks(ArraySet<Task> tasks) {
++        if (piscesSkipSnapshots()) {
++            return;
++        }
+         for (int i = tasks.size() - 1; i >= 0; i--) {
+             final Task task = tasks.valueAt(i);
+             final int mode = getSnapshotMode(task);
+diff --git a/services/core/jni/com_android_server_AlarmManagerService.cpp b/services/core/jni/com_android_server_AlarmManagerService.cpp
+index 47350c11f95..2e6006c2ac1 100644
+--- a/services/core/jni/com_android_server_AlarmManagerService.cpp
++++ b/services/core/jni/com_android_server_AlarmManagerService.cpp
+@@ -337,9 +337,40 @@ static jlong android_server_AlarmManagerService_init(JNIEnv*, jobject)
+     }
+ 
+     for (size_t i = 0; i < fds.size(); i++) {
+-        fds[i] = timerfd_create(android_alarm_to_clockid[i], 0);
++        clockid_t clock = android_alarm_to_clockid[i];
++        fds[i] = timerfd_create(clock, 0);
++        if (fds[i] < 0 && errno == EINVAL) {
++            // pisces: the 3.4 kernel has no alarm timerfd support; fall back
++            // to the non-wakeup clock so AlarmManagerService can start.
++            clockid_t fallback;
++            switch (clock) {
++            case CLOCK_REALTIME_ALARM:
++                fallback = CLOCK_REALTIME;
++                break;
++            case CLOCK_BOOTTIME_ALARM:
++                fallback = CLOCK_BOOTTIME;
++                break;
++            default:
++                fallback = CLOCK_MONOTONIC;
++                break;
++            }
++            ALOGW("pisces: timerfd_create(%d) unsupported, using %d", clock, fallback);
++            fds[i] = timerfd_create(fallback, 0);
++            if (fds[i] < 0 && errno == EINVAL) {
++                ALOGW("pisces: timerfd_create(%d) unsupported, using CLOCK_MONOTONIC", fallback);
++                fds[i] = timerfd_create(CLOCK_MONOTONIC, 0);
++                if (fds[i] >= 0) {
++                    continue;
++                }
++                fallback = CLOCK_MONOTONIC;
++            }
++            if (fds[i] >= 0) {
++                continue;
++            }
++            clock = fallback;
++        }
+         if (fds[i] < 0) {
+-            log_timerfd_create_error(android_alarm_to_clockid[i]);
++            log_timerfd_create_error(clock);
+             close(epollfd);
+             for (size_t j = 0; j < i; j++) {
+                 close(fds[j]);
+diff --git a/services/core/jni/com_android_server_UsbDeviceManager.cpp b/services/core/jni/com_android_server_UsbDeviceManager.cpp
+index ff1ec04cb23..84e5eb121b7 100644
+--- a/services/core/jni/com_android_server_UsbDeviceManager.cpp
++++ b/services/core/jni/com_android_server_UsbDeviceManager.cpp
+@@ -129,10 +129,18 @@ static jobject android_server_UsbDeviceManager_openControl(JNIEnv *env, jobject
+     if (!strcmp(function, "mtp") || ptp) {
+         fd = TEMP_FAILURE_RETRY(open(ptp ? FFS_PTP_EP0 : FFS_MTP_EP0, O_RDWR));
+         if (fd < 0) {
+-            ALOGE("could not open control for %s %s", function, strerror(errno));
+-            goto error;
+-        }
+-        if (!writeDescriptors(fd, ptp)) {
++            /* pisces: the legacy android_usb gadget has no per-function
++             * FunctionFS control node, which made UsbDeviceManager mark MTP/PTP
++             * as unavailable ("Failed to open control for mtp") and grey out
++             * every entry of the USB preferences.  The actual switching goes
++             * through the IUsbGadget HAL, so hand back a sink instead. */
++            ALOGW("no ffs control for %s (%s), using the gadget HAL only",
++                  function, strerror(errno));
++            fd = open("/dev/null", O_RDWR);
++            if (fd < 0) {
++                goto error;
++            }
++        } else if (!writeDescriptors(fd, ptp)) {
+             goto error;
+         }
+     }
+diff --git a/services/java/com/android/server/SystemServer.java b/services/java/com/android/server/SystemServer.java
+index 914a1697c7b..082af9bc4aa 100644
+--- a/services/java/com/android/server/SystemServer.java
++++ b/services/java/com/android/server/SystemServer.java
+@@ -1289,7 +1289,13 @@ public final class SystemServer {
+             }
+ 
+             traceBeginAndSlog("StartAudioService");
+-            mSystemServiceManager.startService(AudioService.Lifecycle.class);
++            // pisces: the A9 audio HAL is not available yet and AudioService
++            // blocks boot waiting for media.audio_policy.
++            if (SystemProperties.getBoolean("ro.pisces.skip_audio", false)) {
++                Slog.w(TAG, "pisces: AudioService skipped (ro.pisces.skip_audio)");
++            } else {
++                mSystemServiceManager.startService(AudioService.Lifecycle.class);
++            }
+             traceEnd();
+ 
+             if (mPackageManager.hasSystemFeature(PackageManager.FEATURE_BROADCAST_RADIO)) {
+diff --git a/services/usb/java/com/android/server/usb/UsbDeviceManager.java b/services/usb/java/com/android/server/usb/UsbDeviceManager.java
+index b67c87e6c41..ad2712d69b7 100644
+--- a/services/usb/java/com/android/server/usb/UsbDeviceManager.java
++++ b/services/usb/java/com/android/server/usb/UsbDeviceManager.java
+@@ -1711,6 +1711,8 @@ public class UsbDeviceManager implements ActivityManagerInternal.ScreenObserver
+     }
+ 
+     private static final class UsbHandlerHal extends UsbHandler {
++        private static final String STATE_PATH = "/sys/class/android_usb/android0/state";
++
+ 
+         /**
+          * Proxy object for the usb gadget hal daemon.
+@@ -1918,6 +1920,18 @@ public class UsbDeviceManager implements ActivityManagerInternal.ScreenObserver
+ 
+                 removeMessages(MSG_SET_FUNCTIONS_TIMEOUT);
+                 Slog.e(TAG, "notifyCurrentFunction request:" + mRequest + " status:" + status);
++                /* pisces: the HAL only read /sys/class/android_usb/android0/state
++                 * once in its constructor, so mConnected stayed at whatever the
++                 * kernel reported while the gadget was still coming up.  Every
++                 * USB_STATE broadcast then said "not connected", which greyed out
++                 * the USB preferences and made Tethering untether the rndis
++                 * interface right away.  Refresh the state after each switch. */
++                try {
++                    String state = FileUtils.readTextFile(new File(STATE_PATH), 0, null).trim();
++                    updateState(state);
++                } catch (Exception e) {
++                    Slog.w(TAG, "cannot refresh the USB state: " + e);
++                }
+                 if (status == Status.SUCCESS) {
+                     mCurrentFunctionsApplied = true;
+                 } else if (!mChargingFunctions) {

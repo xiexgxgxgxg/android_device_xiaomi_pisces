@@ -14,6 +14,16 @@
 /dev/camera*    0660    media   camera
 /dev/focuser*   0660    media   camera
 /dev/torch*     0660    media   camera
+
+# debugging aid: let adb shell run tinymix/tinyplay while the audio path is
+# being brought up (SELinux additionally needs allow shell audio_device)
+/dev/snd/controlC0 0666 system audio
+
+# The max77665 flash driver registers its "flashlight" LED class device with
+# 0644 root:root, so the camera HAL (user media) cannot even open
+# /sys/class/leds/flashlight/brightness to turn the torch on.
+/sys/devices/platform/tegra11-i2c.4/i2c-4/4-0066/max77665-flash/leds/flashlight/brightness 0660 media camera
+/sys/devices/platform/tegra11-i2c.4/i2c-4/4-0066/max77665-flash/leds/flashlight/max_brightness 0440 media camera
 /dev/video0     0660    media   camera
 /dev/video1     0660    media   camera
 /dev/mipi-cal   0660    media   camera

@@ -7,14 +7,14 @@
 # other main services, so the switch happens before any app asks for a codec.
 service media_omx_system /system/bin/media_omx_service
     class main
-    user mediacodec
+    user media
     group camera drmrpc mediadrm
     ioprio rt 4
     writepid /dev/cpuset/foreground/tasks
     disabled
 
-on early-init
-    stop vendor.media.omx
-
 on boot
+    # The vendor service has already been started by its class at this point;
+    # stop it so only our system-process instance owns the OMX store.
+    stop vendor.media.omx
     start media_omx_system

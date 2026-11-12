@@ -16,7 +16,7 @@
 # Phase 2 raises it to 816 MHz once Android reports boot_completed.
 
 BOOT_MAXF=${PISCES_CPU_BOOT_MAXF:-510000}
-MAXF=${PISCES_CPU_MAXF:-1224000}
+MAXF=${PISCES_CPU_MAXF:-1428000}
 
 log() {
     echo "pisces_cpu: $*" > /dev/kmsg

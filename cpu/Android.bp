@@ -1,0 +1,6 @@
+cc_binary {
+    name: "pisces_cpu",
+    srcs: ["pisces_cpu.c"],
+    cflags: ["-Wall", "-Werror"],
+    strip: { none: true },
+}

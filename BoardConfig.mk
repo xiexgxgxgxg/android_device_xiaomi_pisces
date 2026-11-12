@@ -158,8 +158,20 @@ NETD_DISABLE_MULTIUSER_VPN := true
 COMMON_GLOBAL_CFLAGS += -DHAVE_MIUI_SENSORS_BLOB
 
 # SELinux
-BOARD_KERNEL_CMDLINE += androidboot.selinux=permissive
+BOARD_KERNEL_CMDLINE += androidboot.selinux=enforcing
 BOARD_SEPOLICY_DIRS += $(LOCAL_PATH)/sepolicy
+# The 3.4 kernel's policy parser tops out at POLICYDB_VERSION_ROLETRANS (26);
+# Android 9's default is 30.  Build the policy for v26 and keep the xperm
+# statements stripped (see the v26 handover notes).
+POLICYVERS := 26
+
+# The NVIDIA camera blobs (libFaceProc.so et al.) are built with text
+# relocations and need execute permission on a private writable mapping
+# (execmod).  That is only permitted by public/domain.te when the platform is
+# declared as needing text relocations; without this switch the
+# "allow hal_camera_default system_file:file execmod" rule in
+# system/sepolicy/vendor/hal_camera_default.te breaks the neverallow check.
+TARGET_NEEDS_PLATFORM_TEXT_RELOCATIONS := true
 
 # The list below is order dependent
 #BOARD_SEPOLICY_UNION := \

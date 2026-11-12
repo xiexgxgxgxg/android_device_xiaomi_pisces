@@ -354,3 +354,24 @@ PRODUCT_COPY_FILES += \
 # pisces: start the OMX HAL from a system process (see the rc for the details).
 PRODUCT_COPY_FILES += \
     device/xiaomi/pisces/etc/init/init_pisces_omx.rc:system/etc/init/init_pisces_omx.rc
+
+
+# pisces: development convenience -- the framework's AdbDebuggingManager keeps
+# rewriting /data/misc/adb/adb_keys, so on a freshly formatted /data the device
+# ends up "unauthorized" with no way to tap the dialog (the screen is the thing
+# being debugged).  This only relaxes the adb key check; remove it for release.
+PRODUCT_DEFAULT_PROPERTY_OVERRIDES += ro.adb.secure=0
+
+
+# pisces: sign the build with our own release keys instead of the public
+# test-keys, so the security center stops warning about a public-key build
+# and the packages cannot be updated by anyone holding the AOSP test key.
+PRODUCT_DEFAULT_DEV_CERTIFICATE := vendor/pisces-keys/releasekey
+PRODUCT_EXTRA_RECOVERY_KEYS := vendor/pisces-keys/releasekey
+
+# pisces: after switching to our own release key the platform-signed Bluetooth
+# app is checked against the privileged-permission whitelist and system_server
+# aborts boot ("Signature|privileged permissions not in privapp-permissions
+# whitelist: com.android.bluetooth ...").
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/privapp-permissions-bluetooth.xml:system/etc/permissions/privapp-permissions-pisces-bluetooth.xml

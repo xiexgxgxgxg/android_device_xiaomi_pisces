@@ -1,0 +1,2011 @@
+diff --git a/Android.mk b/Android.mk
+index ff38a43a..e6599676 100644
+--- a/Android.mk
++++ b/Android.mk
+@@ -647,7 +647,7 @@ endif
+ $(LOCAL_BUILT_MODULE): PRIVATE_CIL_FILES := $(all_cil_files)
+ $(LOCAL_BUILT_MODULE): PRIVATE_NEVERALLOW_ARG := $(NEVERALLOW_ARG)
+ $(LOCAL_BUILT_MODULE): $(HOST_OUT_EXECUTABLES)/secilc $(all_cil_files) $(built_sepolicy_neverallows)
+-	$(hide) $(HOST_OUT_EXECUTABLES)/secilc -m -M true -G -c $(POLICYVERS) $(PRIVATE_NEVERALLOW_ARG) \
++	$(hide) $(HOST_OUT_EXECUTABLES)/secilc -D -m -M true -G -c $(POLICYVERS) $(PRIVATE_NEVERALLOW_ARG) \
+ 		$(PRIVATE_CIL_FILES) -o $@ -f /dev/null
+ 
+ built_precompiled_sepolicy := $(LOCAL_BUILT_MODULE)
+diff --git a/prebuilts/api/26.0/private/app.te b/prebuilts/api/26.0/private/app.te
+index 6f2b820b..2e127f1b 100644
+--- a/prebuilts/api/26.0/private/app.te
++++ b/prebuilts/api/26.0/private/app.te
+@@ -270,8 +270,7 @@ use_keystore({ appdomain -isolated_app -ephemeral_app })
+ allow appdomain console_device:chr_file { read write };
+ 
+ # only allow unprivileged socket ioctl commands
+-allowxperm { appdomain -bluetooth } self:{ rawip_socket tcp_socket udp_socket }
+-  ioctl { unpriv_sock_ioctls unpriv_tty_ioctls };
++# [v26-strip] allowxperm { appdomain -bluetooth } self:{ rawip_socket tcp_socket udp_socket }
+ 
+ allow { appdomain -isolated_app } ion_device:chr_file rw_file_perms;
+ # TODO is write really necessary ?
+diff --git a/prebuilts/api/26.0/private/app_neverallows.te b/prebuilts/api/26.0/private/app_neverallows.te
+index 3c159d5f..3badc2e6 100644
+--- a/prebuilts/api/26.0/private/app_neverallows.te
++++ b/prebuilts/api/26.0/private/app_neverallows.te
+@@ -54,7 +54,7 @@ neverallow all_untrusted_apps sysfs_mac_address:file no_rw_file_perms;
+ 
+ # Restrict socket ioctls. Either 1. disallow privileged ioctls, 2. disallow the
+ # ioctl permission, or 3. disallow the socket class.
+-neverallowxperm all_untrusted_apps domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
++# [v26-strip] neverallowxperm all_untrusted_apps domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
+ neverallow all_untrusted_apps *:{ netlink_route_socket netlink_selinux_socket } ioctl;
+ neverallow all_untrusted_apps *:{
+   socket netlink_socket packet_socket key_socket appletalk_socket
+diff --git a/prebuilts/api/26.0/private/bluetooth.te b/prebuilts/api/26.0/private/bluetooth.te
+index 1c0e14fb..c090e25a 100644
+--- a/prebuilts/api/26.0/private/bluetooth.te
++++ b/prebuilts/api/26.0/private/bluetooth.te
+@@ -10,7 +10,7 @@ net_domain(bluetooth)
+ type_transition bluetooth bluetooth_data_file:sock_file bluetooth_socket;
+ 
+ # Allow access to net_admin ioctls
+-allowxperm bluetooth self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm bluetooth self:udp_socket ioctl priv_sock_ioctls;
+ 
+ wakelock_use(bluetooth);
+ 
+diff --git a/prebuilts/api/26.0/private/priv_app.te b/prebuilts/api/26.0/private/priv_app.te
+index 065ea1ad..be1e6362 100644
+--- a/prebuilts/api/26.0/private/priv_app.te
++++ b/prebuilts/api/26.0/private/priv_app.te
+@@ -86,7 +86,7 @@ r_dir_file(priv_app, rootfs)
+ allow priv_app config_gz:file { open read getattr };
+ 
+ # access the mac address
+-allowxperm priv_app self:udp_socket ioctl SIOCGIFHWADDR;
++# [v26-strip] # [v26-strip] allowxperm priv_app self:udp_socket ioctl SIOCGIFHWADDR;
+ 
+ # Allow GMS core to communicate with update_engine for A/B update.
+ binder_call(priv_app, update_engine)
+diff --git a/prebuilts/api/26.0/private/system_server.te b/prebuilts/api/26.0/private/system_server.te
+index 05e47734..75b8429d 100644
+--- a/prebuilts/api/26.0/private/system_server.te
++++ b/prebuilts/api/26.0/private/system_server.te
+@@ -52,7 +52,7 @@ allow system_server zygote:unix_stream_socket { getopt getattr };
+ net_domain(system_server)
+ # in addition to ioctls whitelisted for all domains, also allow system_server
+ # to use privileged ioctls commands. Needed to set up VPNs.
+-allowxperm system_server self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm system_server self:udp_socket ioctl priv_sock_ioctls;
+ bluetooth_domain(system_server)
+ 
+ # These are the capabilities assigned by the zygote to the
+diff --git a/prebuilts/api/26.0/public/dnsmasq.te b/prebuilts/api/26.0/public/dnsmasq.te
+index ccac69a3..6f66a5ca 100644
+--- a/prebuilts/api/26.0/public/dnsmasq.te
++++ b/prebuilts/api/26.0/public/dnsmasq.te
+@@ -3,7 +3,7 @@ type dnsmasq, domain;
+ type dnsmasq_exec, exec_type, file_type;
+ 
+ net_domain(dnsmasq)
+-allowxperm dnsmasq self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm dnsmasq self:udp_socket ioctl priv_sock_ioctls;
+ 
+ # TODO:  Run with dhcp group to avoid need for dac_override.
+ allow dnsmasq self:capability dac_override;
+diff --git a/prebuilts/api/26.0/public/domain.te b/prebuilts/api/26.0/public/domain.te
+index d2b370a2..922acd23 100644
+--- a/prebuilts/api/26.0/public/domain.te
++++ b/prebuilts/api/26.0/public/domain.te
+@@ -200,17 +200,15 @@ allow domain fs_type:dir getattr;
+ # defaults for all processes. Note that granting this whitelist to domain does
+ # not grant the ioctl permission on these socket types. That must be granted
+ # separately.
+-allowxperm domain domain:{ rawip_socket tcp_socket udp_socket }
+-  ioctl { unpriv_sock_ioctls unpriv_tty_ioctls };
++# [v26-strip] allowxperm domain domain:{ rawip_socket tcp_socket udp_socket }
+ # default whitelist for unix sockets.
+-allowxperm domain domain:{ unix_dgram_socket unix_stream_socket }
+-  ioctl unpriv_unix_sock_ioctls;
++# [v26-strip] allowxperm domain domain:{ unix_dgram_socket unix_stream_socket }
+ 
+ # Restrict PTYs to only whitelisted ioctls.
+ # Note that granting this whitelist to domain does
+ # not grant the wider ioctl permission. That must be granted
+ # separately.
+-allowxperm domain devpts:chr_file ioctl unpriv_tty_ioctls;
++# [v26-strip] # [v26-strip] allowxperm domain devpts:chr_file ioctl unpriv_tty_ioctls;
+ 
+ # Workaround for policy compiler being too aggressive and removing hwservice_manager_type
+ # when it's not explicitly used in allow rules
+@@ -224,12 +222,12 @@ allow { domain -domain } vndservice_manager_type:service_manager { add find };
+ ###
+ 
+ # All socket ioctls must be restricted to a whitelist.
+-neverallowxperm domain domain:socket_class_set ioctl { 0 };
++# [v26-strip] neverallowxperm domain domain:socket_class_set ioctl { 0 };
+ 
+ # TIOCSTI is only ever used for exploits. Block it.
+ # b/33073072, b/7530569
+ # http://www.openwall.com/lists/oss-security/2016/09/26/14
+-neverallowxperm * devpts:chr_file ioctl TIOCSTI;
++# [v26-strip] neverallowxperm * devpts:chr_file ioctl TIOCSTI;
+ 
+ # Do not allow any domain other than init or recovery to create unlabeled files.
+ neverallow { domain -init -recovery } unlabeled:dir_file_class_set create;
+diff --git a/prebuilts/api/26.0/public/hal_drm.te b/prebuilts/api/26.0/public/hal_drm.te
+index 5a6bf5c7..55049bbb 100644
+--- a/prebuilts/api/26.0/public/hal_drm.te
++++ b/prebuilts/api/26.0/public/hal_drm.te
+@@ -45,8 +45,7 @@ allow hal_drm sysfs:file r_file_perms;
+ allow hal_drm tee_device:chr_file rw_file_perms;
+ 
+ # only allow unprivileged socket ioctl commands
+-allowxperm hal_drm self:{ rawip_socket tcp_socket udp_socket }
+-  ioctl { unpriv_sock_ioctls unpriv_tty_ioctls };
++# [v26-strip] allowxperm hal_drm self:{ rawip_socket tcp_socket udp_socket }
+ 
+ ###
+ ### neverallow rules
+@@ -57,4 +56,4 @@ allowxperm hal_drm self:{ rawip_socket tcp_socket udp_socket }
+ neverallow hal_drm { file_type fs_type }:file execute_no_trans;
+ 
+ # do not allow privileged socket ioctl commands
+-neverallowxperm hal_drm domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
++# [v26-strip] neverallowxperm hal_drm domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
+diff --git a/prebuilts/api/26.0/public/hal_wifi.te b/prebuilts/api/26.0/public/hal_wifi.te
+index 5e0b9bc4..a8d5b673 100644
+--- a/prebuilts/api/26.0/public/hal_wifi.te
++++ b/prebuilts/api/26.0/public/hal_wifi.te
+@@ -12,7 +12,7 @@ set_prop(hal_wifi, wifi_prop)
+ 
+ # allow hal wifi set interfaces up and down
+ allow hal_wifi self:udp_socket create_socket_perms;
+-allowxperm hal_wifi self:udp_socket ioctl { SIOCSIFFLAGS };
++# [v26-strip] # [v26-strip] allowxperm hal_wifi self:udp_socket ioctl { SIOCSIFFLAGS };
+ 
+ allow hal_wifi self:capability { net_admin net_raw };
+ # allow hal_wifi to speak to nl80211 in the kernel
+diff --git a/prebuilts/api/26.0/public/hal_wifi_supplicant.te b/prebuilts/api/26.0/public/hal_wifi_supplicant.te
+index 0f2540e4..82e3ac50 100644
+--- a/prebuilts/api/26.0/public/hal_wifi_supplicant.te
++++ b/prebuilts/api/26.0/public/hal_wifi_supplicant.te
+@@ -6,7 +6,7 @@ add_hwservice(hal_wifi_supplicant_server, hal_wifi_supplicant_hwservice)
+ allow hal_wifi_supplicant_client hal_wifi_supplicant_hwservice:hwservice_manager find;
+ 
+ # in addition to ioctls whitelisted for all domains, grant hal_wifi_supplicant priv_sock_ioctls.
+-allowxperm hal_wifi_supplicant self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm hal_wifi_supplicant self:udp_socket ioctl priv_sock_ioctls;
+ 
+ r_dir_file(hal_wifi_supplicant, sysfs_type)
+ r_dir_file(hal_wifi_supplicant, proc_net)
+@@ -18,7 +18,7 @@ allow hal_wifi_supplicant self:netlink_route_socket nlmsg_write;
+ allow hal_wifi_supplicant self:netlink_socket create_socket_perms_no_ioctl;
+ allow hal_wifi_supplicant self:netlink_generic_socket create_socket_perms_no_ioctl;
+ allow hal_wifi_supplicant self:packet_socket create_socket_perms;
+-allowxperm hal_wifi_supplicant self:packet_socket ioctl { unpriv_sock_ioctls priv_sock_ioctls unpriv_tty_ioctls };
++# [v26-strip] # [v26-strip] allowxperm hal_wifi_supplicant self:packet_socket ioctl { unpriv_sock_ioctls priv_sock_ioctls unpriv_tty_ioctls };
+ allow hal_wifi_supplicant wifi_data_file:dir create_dir_perms;
+ allow hal_wifi_supplicant wifi_data_file:file create_file_perms;
+ 
+diff --git a/prebuilts/api/26.0/public/init.te b/prebuilts/api/26.0/public/init.te
+index 6d43ef46..99e72654 100644
+--- a/prebuilts/api/26.0/public/init.te
++++ b/prebuilts/api/26.0/public/init.te
+@@ -342,7 +342,7 @@ allow init self:capability audit_write;
+ # Run "ifup lo" to bring up the localhost interface
+ allow init self:udp_socket { create ioctl };
+ # in addition to unpriv ioctls granted to all domains, init also needs:
+-allowxperm init self:udp_socket ioctl SIOCSIFFLAGS;
++# [v26-strip] # [v26-strip] allowxperm init self:udp_socket ioctl SIOCSIFFLAGS;
+ allow init self:capability net_raw;
+ 
+ # This line seems suspect, as it should not really need to
+diff --git a/prebuilts/api/26.0/public/mediadrmserver.te b/prebuilts/api/26.0/public/mediadrmserver.te
+index cef81212..fbf07d7f 100644
+--- a/prebuilts/api/26.0/public/mediadrmserver.te
++++ b/prebuilts/api/26.0/public/mediadrmserver.te
+@@ -30,4 +30,4 @@ binder_call(mediadrmserver, mediacodec)
+ neverallow mediadrmserver { file_type fs_type }:file execute_no_trans;
+ 
+ # do not allow privileged socket ioctl commands
+-neverallowxperm mediadrmserver domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
++# [v26-strip] neverallowxperm mediadrmserver domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
+diff --git a/prebuilts/api/26.0/public/mediaserver.te b/prebuilts/api/26.0/public/mediaserver.te
+index 6efaf0fd..dd260946 100644
+--- a/prebuilts/api/26.0/public/mediaserver.te
++++ b/prebuilts/api/26.0/public/mediaserver.te
+@@ -115,8 +115,7 @@ allow mediaserver drmserver:drmservice {
+ };
+ 
+ # only allow unprivileged socket ioctl commands
+-allowxperm mediaserver self:{ rawip_socket tcp_socket udp_socket }
+-  ioctl { unpriv_sock_ioctls unpriv_tty_ioctls };
++# [v26-strip] allowxperm mediaserver self:{ rawip_socket tcp_socket udp_socket }
+ 
+ # Access to /data/media.
+ # This should be removed if sdcardfs is modified to alter the secontext for its
+@@ -147,4 +146,4 @@ binder_call(mediaserver, mediacodec)
+ neverallow mediaserver { file_type fs_type }:file execute_no_trans;
+ 
+ # do not allow privileged socket ioctl commands
+-neverallowxperm mediaserver domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
++# [v26-strip] neverallowxperm mediaserver domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
+diff --git a/prebuilts/api/26.0/public/netd.te b/prebuilts/api/26.0/public/netd.te
+index 691887fc..d6f4c4ea 100644
+--- a/prebuilts/api/26.0/public/netd.te
++++ b/prebuilts/api/26.0/public/netd.te
+@@ -4,7 +4,7 @@ type netd_exec, exec_type, file_type;
+ 
+ net_domain(netd)
+ # in addition to ioctls whitelisted for all domains, grant netd priv_sock_ioctls.
+-allowxperm netd self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm netd self:udp_socket ioctl priv_sock_ioctls;
+ 
+ r_dir_file(netd, cgroup)
+ allow netd system_server:fd use;
+diff --git a/prebuilts/api/26.0/public/ppp.te b/prebuilts/api/26.0/public/ppp.te
+index 04e17f57..ce531595 100644
+--- a/prebuilts/api/26.0/public/ppp.te
++++ b/prebuilts/api/26.0/public/ppp.te
+@@ -10,8 +10,8 @@ r_dir_file(ppp, proc_net)
+ allow ppp mtp:socket rw_socket_perms;
+ 
+ # ioctls needed for VPN.
+-allowxperm ppp self:udp_socket ioctl priv_sock_ioctls;
+-allowxperm ppp mtp:socket ioctl ppp_ioctls;
++# [v26-strip] # [v26-strip] allowxperm ppp self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm ppp mtp:socket ioctl ppp_ioctls;
+ 
+ allow ppp mtp:unix_dgram_socket rw_socket_perms;
+ allow ppp ppp_device:chr_file rw_file_perms;
+diff --git a/prebuilts/api/26.0/public/racoon.te b/prebuilts/api/26.0/public/racoon.te
+index 00744d8f..4d96b572 100644
+--- a/prebuilts/api/26.0/public/racoon.te
++++ b/prebuilts/api/26.0/public/racoon.te
+@@ -5,7 +5,7 @@ type racoon_exec, exec_type, file_type;
+ typeattribute racoon mlstrustedsubject;
+ 
+ net_domain(racoon)
+-allowxperm racoon self:udp_socket ioctl { SIOCSIFFLAGS SIOCSIFADDR SIOCSIFNETMASK };
++# [v26-strip] # [v26-strip] allowxperm racoon self:udp_socket ioctl { SIOCSIFFLAGS SIOCSIFADDR SIOCSIFNETMASK };
+ 
+ binder_use(racoon)
+ 
+diff --git a/prebuilts/api/26.0/public/rild.te b/prebuilts/api/26.0/public/rild.te
+index 14420dff..85a44738 100644
+--- a/prebuilts/api/26.0/public/rild.te
++++ b/prebuilts/api/26.0/public/rild.te
+@@ -3,7 +3,7 @@ type rild, domain;
+ hal_server_domain(rild, hal_telephony)
+ 
+ net_domain(rild)
+-allowxperm rild self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm rild self:udp_socket ioctl priv_sock_ioctls;
+ 
+ allow rild self:netlink_route_socket nlmsg_write;
+ allow rild kernel:system module_request;
+diff --git a/prebuilts/api/26.0/public/shell.te b/prebuilts/api/26.0/public/shell.te
+index 1fb896a7..54161dcb 100644
+--- a/prebuilts/api/26.0/public/shell.te
++++ b/prebuilts/api/26.0/public/shell.te
+@@ -169,7 +169,7 @@ allow shell sepolicy_file:file r_file_perms;
+ neverallow shell file_type:file link;
+ 
+ # Do not allow privileged socket ioctl commands
+-neverallowxperm shell domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
++# [v26-strip] neverallowxperm shell domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
+ 
+ # limit shell access to sensitive char drivers to
+ # only getattr required for host side test.
+diff --git a/prebuilts/api/26.0/public/te_macros b/prebuilts/api/26.0/public/te_macros
+index d65eb889..7911ee9d 100644
+--- a/prebuilts/api/26.0/public/te_macros
++++ b/prebuilts/api/26.0/public/te_macros
+@@ -412,11 +412,11 @@ type $1_devpts, fs_type;
+ type_transition $1 devpts:chr_file $1_devpts;
+ # Allow use of the pty after creation.
+ allow $1 $1_devpts:chr_file { open getattr read write ioctl };
+-allowxperm $1 $1_devpts:chr_file ioctl unpriv_tty_ioctls;
++# [v26-strip] allowxperm $1 $1_devpts:chr_file ioctl unpriv_tty_ioctls;
+ # TIOCSTI is only ever used for exploits. Block it.
+ # b/33073072, b/7530569
+ # http://www.openwall.com/lists/oss-security/2016/09/26/14
+-neverallowxperm * $1_devpts:chr_file ioctl TIOCSTI;
++# [v26-strip] neverallowxperm * $1_devpts:chr_file ioctl TIOCSTI;
+ # Note: devpts:dir search and ptmx_device:chr_file rw_file_perms
+ # allowed to everyone via domain.te.
+ ')
+diff --git a/prebuilts/api/26.0/public/wificond.te b/prebuilts/api/26.0/public/wificond.te
+index c91053e7..c2cc365e 100644
+--- a/prebuilts/api/26.0/public/wificond.te
++++ b/prebuilts/api/26.0/public/wificond.te
+@@ -13,7 +13,7 @@ set_prop(wificond, ctl_default_prop)
+ # create sockets to set interfaces up and down
+ allow wificond self:udp_socket create_socket_perms;
+ # setting interface state up/down is a privileged ioctl
+-allowxperm wificond self:udp_socket ioctl { SIOCSIFFLAGS };
++# [v26-strip] # [v26-strip] allowxperm wificond self:udp_socket ioctl { SIOCSIFFLAGS };
+ allow wificond self:capability { net_admin net_raw };
+ # allow wificond to speak to nl80211 in the kernel
+ allow wificond self:netlink_socket create_socket_perms_no_ioctl;
+diff --git a/prebuilts/api/27.0/private/app.te b/prebuilts/api/27.0/private/app.te
+index 9251ed9c..db2582b8 100644
+--- a/prebuilts/api/27.0/private/app.te
++++ b/prebuilts/api/27.0/private/app.te
+@@ -283,8 +283,7 @@ use_keystore({ appdomain -isolated_app -ephemeral_app })
+ allow appdomain console_device:chr_file { read write };
+ 
+ # only allow unprivileged socket ioctl commands
+-allowxperm { appdomain -bluetooth } self:{ rawip_socket tcp_socket udp_socket }
+-  ioctl { unpriv_sock_ioctls unpriv_tty_ioctls };
++# [v26-strip] allowxperm { appdomain -bluetooth } self:{ rawip_socket tcp_socket udp_socket }
+ 
+ allow { appdomain -isolated_app } ion_device:chr_file rw_file_perms;
+ # TODO is write really necessary ?
+diff --git a/prebuilts/api/27.0/private/app_neverallows.te b/prebuilts/api/27.0/private/app_neverallows.te
+index a3d7d498..5f1d7137 100644
+--- a/prebuilts/api/27.0/private/app_neverallows.te
++++ b/prebuilts/api/27.0/private/app_neverallows.te
+@@ -59,7 +59,7 @@ neverallow all_untrusted_apps sysfs_mac_address:file no_rw_file_perms;
+ 
+ # Restrict socket ioctls. Either 1. disallow privileged ioctls, 2. disallow the
+ # ioctl permission, or 3. disallow the socket class.
+-neverallowxperm all_untrusted_apps domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
++# [v26-strip] neverallowxperm all_untrusted_apps domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
+ neverallow all_untrusted_apps *:{ netlink_route_socket netlink_selinux_socket } ioctl;
+ neverallow all_untrusted_apps *:{
+   socket netlink_socket packet_socket key_socket appletalk_socket
+diff --git a/prebuilts/api/27.0/private/bluetooth.te b/prebuilts/api/27.0/private/bluetooth.te
+index 451d27af..5c4db907 100644
+--- a/prebuilts/api/27.0/private/bluetooth.te
++++ b/prebuilts/api/27.0/private/bluetooth.te
+@@ -9,7 +9,7 @@ net_domain(bluetooth)
+ type_transition bluetooth bluetooth_data_file:sock_file bluetooth_socket;
+ 
+ # Allow access to net_admin ioctls
+-allowxperm bluetooth self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm bluetooth self:udp_socket ioctl priv_sock_ioctls;
+ 
+ wakelock_use(bluetooth);
+ 
+diff --git a/prebuilts/api/27.0/private/priv_app.te b/prebuilts/api/27.0/private/priv_app.te
+index 60fb4110..1512f5b7 100644
+--- a/prebuilts/api/27.0/private/priv_app.te
++++ b/prebuilts/api/27.0/private/priv_app.te
+@@ -85,7 +85,7 @@ r_dir_file(priv_app, rootfs)
+ allow priv_app config_gz:file { open read getattr };
+ 
+ # access the mac address
+-allowxperm priv_app self:udp_socket ioctl SIOCGIFHWADDR;
++# [v26-strip] # [v26-strip] allowxperm priv_app self:udp_socket ioctl SIOCGIFHWADDR;
+ 
+ # Allow GMS core to communicate with update_engine for A/B update.
+ binder_call(priv_app, update_engine)
+diff --git a/prebuilts/api/27.0/private/system_server.te b/prebuilts/api/27.0/private/system_server.te
+index 40c5382d..74af60d6 100644
+--- a/prebuilts/api/27.0/private/system_server.te
++++ b/prebuilts/api/27.0/private/system_server.te
+@@ -52,7 +52,7 @@ allow system_server zygote:unix_stream_socket { getopt getattr };
+ net_domain(system_server)
+ # in addition to ioctls whitelisted for all domains, also allow system_server
+ # to use privileged ioctls commands. Needed to set up VPNs.
+-allowxperm system_server self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm system_server self:udp_socket ioctl priv_sock_ioctls;
+ bluetooth_domain(system_server)
+ 
+ # These are the capabilities assigned by the zygote to the
+diff --git a/prebuilts/api/27.0/public/dnsmasq.te b/prebuilts/api/27.0/public/dnsmasq.te
+index ccac69a3..6f66a5ca 100644
+--- a/prebuilts/api/27.0/public/dnsmasq.te
++++ b/prebuilts/api/27.0/public/dnsmasq.te
+@@ -3,7 +3,7 @@ type dnsmasq, domain;
+ type dnsmasq_exec, exec_type, file_type;
+ 
+ net_domain(dnsmasq)
+-allowxperm dnsmasq self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm dnsmasq self:udp_socket ioctl priv_sock_ioctls;
+ 
+ # TODO:  Run with dhcp group to avoid need for dac_override.
+ allow dnsmasq self:capability dac_override;
+diff --git a/prebuilts/api/27.0/public/domain.te b/prebuilts/api/27.0/public/domain.te
+index f5c72cc4..2f2fbaf2 100644
+--- a/prebuilts/api/27.0/public/domain.te
++++ b/prebuilts/api/27.0/public/domain.te
+@@ -200,17 +200,15 @@ allow domain fs_type:dir getattr;
+ # defaults for all processes. Note that granting this whitelist to domain does
+ # not grant the ioctl permission on these socket types. That must be granted
+ # separately.
+-allowxperm domain domain:{ rawip_socket tcp_socket udp_socket }
+-  ioctl { unpriv_sock_ioctls unpriv_tty_ioctls };
++# [v26-strip] allowxperm domain domain:{ rawip_socket tcp_socket udp_socket }
+ # default whitelist for unix sockets.
+-allowxperm domain domain:{ unix_dgram_socket unix_stream_socket }
+-  ioctl unpriv_unix_sock_ioctls;
++# [v26-strip] allowxperm domain domain:{ unix_dgram_socket unix_stream_socket }
+ 
+ # Restrict PTYs to only whitelisted ioctls.
+ # Note that granting this whitelist to domain does
+ # not grant the wider ioctl permission. That must be granted
+ # separately.
+-allowxperm domain devpts:chr_file ioctl unpriv_tty_ioctls;
++# [v26-strip] # [v26-strip] allowxperm domain devpts:chr_file ioctl unpriv_tty_ioctls;
+ 
+ # Workaround for policy compiler being too aggressive and removing hwservice_manager_type
+ # when it's not explicitly used in allow rules
+@@ -227,12 +225,12 @@ with_asan(`allow domain system_data_file:dir getattr;')
+ ###
+ 
+ # All socket ioctls must be restricted to a whitelist.
+-neverallowxperm domain domain:socket_class_set ioctl { 0 };
++# [v26-strip] neverallowxperm domain domain:socket_class_set ioctl { 0 };
+ 
+ # TIOCSTI is only ever used for exploits. Block it.
+ # b/33073072, b/7530569
+ # http://www.openwall.com/lists/oss-security/2016/09/26/14
+-neverallowxperm * devpts:chr_file ioctl TIOCSTI;
++# [v26-strip] neverallowxperm * devpts:chr_file ioctl TIOCSTI;
+ 
+ # Do not allow any domain other than init or recovery to create unlabeled files.
+ neverallow { domain -init -recovery } unlabeled:dir_file_class_set create;
+diff --git a/prebuilts/api/27.0/public/hal_cas.te b/prebuilts/api/27.0/public/hal_cas.te
+index fd5d63bb..5c1f3417 100644
+--- a/prebuilts/api/27.0/public/hal_cas.te
++++ b/prebuilts/api/27.0/public/hal_cas.te
+@@ -34,4 +34,4 @@ allow hal_cas tee_device:chr_file rw_file_perms;
+ neverallow hal_cas { file_type fs_type }:file execute_no_trans;
+ 
+ # do not allow privileged socket ioctl commands
+-neverallowxperm hal_cas domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
++# [v26-strip] neverallowxperm hal_cas domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
+diff --git a/prebuilts/api/27.0/public/hal_drm.te b/prebuilts/api/27.0/public/hal_drm.te
+index 5a6bf5c7..55049bbb 100644
+--- a/prebuilts/api/27.0/public/hal_drm.te
++++ b/prebuilts/api/27.0/public/hal_drm.te
+@@ -45,8 +45,7 @@ allow hal_drm sysfs:file r_file_perms;
+ allow hal_drm tee_device:chr_file rw_file_perms;
+ 
+ # only allow unprivileged socket ioctl commands
+-allowxperm hal_drm self:{ rawip_socket tcp_socket udp_socket }
+-  ioctl { unpriv_sock_ioctls unpriv_tty_ioctls };
++# [v26-strip] allowxperm hal_drm self:{ rawip_socket tcp_socket udp_socket }
+ 
+ ###
+ ### neverallow rules
+@@ -57,4 +56,4 @@ allowxperm hal_drm self:{ rawip_socket tcp_socket udp_socket }
+ neverallow hal_drm { file_type fs_type }:file execute_no_trans;
+ 
+ # do not allow privileged socket ioctl commands
+-neverallowxperm hal_drm domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
++# [v26-strip] neverallowxperm hal_drm domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
+diff --git a/prebuilts/api/27.0/public/hal_wifi.te b/prebuilts/api/27.0/public/hal_wifi.te
+index a01805d5..681a24e5 100644
+--- a/prebuilts/api/27.0/public/hal_wifi.te
++++ b/prebuilts/api/27.0/public/hal_wifi.te
+@@ -12,7 +12,7 @@ set_prop(hal_wifi, wifi_prop)
+ 
+ # allow hal wifi set interfaces up and down
+ allow hal_wifi self:udp_socket create_socket_perms;
+-allowxperm hal_wifi self:udp_socket ioctl { SIOCSIFFLAGS };
++# [v26-strip] # [v26-strip] allowxperm hal_wifi self:udp_socket ioctl { SIOCSIFFLAGS };
+ 
+ allow hal_wifi self:capability { net_admin net_raw };
+ # allow hal_wifi to speak to nl80211 in the kernel
+diff --git a/prebuilts/api/27.0/public/hal_wifi_supplicant.te b/prebuilts/api/27.0/public/hal_wifi_supplicant.te
+index 0f2540e4..82e3ac50 100644
+--- a/prebuilts/api/27.0/public/hal_wifi_supplicant.te
++++ b/prebuilts/api/27.0/public/hal_wifi_supplicant.te
+@@ -6,7 +6,7 @@ add_hwservice(hal_wifi_supplicant_server, hal_wifi_supplicant_hwservice)
+ allow hal_wifi_supplicant_client hal_wifi_supplicant_hwservice:hwservice_manager find;
+ 
+ # in addition to ioctls whitelisted for all domains, grant hal_wifi_supplicant priv_sock_ioctls.
+-allowxperm hal_wifi_supplicant self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm hal_wifi_supplicant self:udp_socket ioctl priv_sock_ioctls;
+ 
+ r_dir_file(hal_wifi_supplicant, sysfs_type)
+ r_dir_file(hal_wifi_supplicant, proc_net)
+@@ -18,7 +18,7 @@ allow hal_wifi_supplicant self:netlink_route_socket nlmsg_write;
+ allow hal_wifi_supplicant self:netlink_socket create_socket_perms_no_ioctl;
+ allow hal_wifi_supplicant self:netlink_generic_socket create_socket_perms_no_ioctl;
+ allow hal_wifi_supplicant self:packet_socket create_socket_perms;
+-allowxperm hal_wifi_supplicant self:packet_socket ioctl { unpriv_sock_ioctls priv_sock_ioctls unpriv_tty_ioctls };
++# [v26-strip] # [v26-strip] allowxperm hal_wifi_supplicant self:packet_socket ioctl { unpriv_sock_ioctls priv_sock_ioctls unpriv_tty_ioctls };
+ allow hal_wifi_supplicant wifi_data_file:dir create_dir_perms;
+ allow hal_wifi_supplicant wifi_data_file:file create_file_perms;
+ 
+diff --git a/prebuilts/api/27.0/public/init.te b/prebuilts/api/27.0/public/init.te
+index e6162a93..f7d04cce 100644
+--- a/prebuilts/api/27.0/public/init.te
++++ b/prebuilts/api/27.0/public/init.te
+@@ -347,7 +347,7 @@ allow init self:capability audit_write;
+ # Run "ifup lo" to bring up the localhost interface
+ allow init self:udp_socket { create ioctl };
+ # in addition to unpriv ioctls granted to all domains, init also needs:
+-allowxperm init self:udp_socket ioctl SIOCSIFFLAGS;
++# [v26-strip] # [v26-strip] allowxperm init self:udp_socket ioctl SIOCSIFFLAGS;
+ allow init self:capability net_raw;
+ 
+ # This line seems suspect, as it should not really need to
+diff --git a/prebuilts/api/27.0/public/mediadrmserver.te b/prebuilts/api/27.0/public/mediadrmserver.te
+index 123cb29a..b29f5e82 100644
+--- a/prebuilts/api/27.0/public/mediadrmserver.te
++++ b/prebuilts/api/27.0/public/mediadrmserver.te
+@@ -28,4 +28,4 @@ binder_call(mediadrmserver, mediacodec)
+ neverallow mediadrmserver { file_type fs_type }:file execute_no_trans;
+ 
+ # do not allow privileged socket ioctl commands
+-neverallowxperm mediadrmserver domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
++# [v26-strip] neverallowxperm mediadrmserver domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
+diff --git a/prebuilts/api/27.0/public/mediaserver.te b/prebuilts/api/27.0/public/mediaserver.te
+index 6efaf0fd..dd260946 100644
+--- a/prebuilts/api/27.0/public/mediaserver.te
++++ b/prebuilts/api/27.0/public/mediaserver.te
+@@ -115,8 +115,7 @@ allow mediaserver drmserver:drmservice {
+ };
+ 
+ # only allow unprivileged socket ioctl commands
+-allowxperm mediaserver self:{ rawip_socket tcp_socket udp_socket }
+-  ioctl { unpriv_sock_ioctls unpriv_tty_ioctls };
++# [v26-strip] allowxperm mediaserver self:{ rawip_socket tcp_socket udp_socket }
+ 
+ # Access to /data/media.
+ # This should be removed if sdcardfs is modified to alter the secontext for its
+@@ -147,4 +146,4 @@ binder_call(mediaserver, mediacodec)
+ neverallow mediaserver { file_type fs_type }:file execute_no_trans;
+ 
+ # do not allow privileged socket ioctl commands
+-neverallowxperm mediaserver domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
++# [v26-strip] neverallowxperm mediaserver domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
+diff --git a/prebuilts/api/27.0/public/netd.te b/prebuilts/api/27.0/public/netd.te
+index aa99da21..63097897 100644
+--- a/prebuilts/api/27.0/public/netd.te
++++ b/prebuilts/api/27.0/public/netd.te
+@@ -4,7 +4,7 @@ type netd_exec, exec_type, file_type;
+ 
+ net_domain(netd)
+ # in addition to ioctls whitelisted for all domains, grant netd priv_sock_ioctls.
+-allowxperm netd self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm netd self:udp_socket ioctl priv_sock_ioctls;
+ 
+ r_dir_file(netd, cgroup)
+ allow netd system_server:fd use;
+diff --git a/prebuilts/api/27.0/public/ppp.te b/prebuilts/api/27.0/public/ppp.te
+index 04e17f57..ce531595 100644
+--- a/prebuilts/api/27.0/public/ppp.te
++++ b/prebuilts/api/27.0/public/ppp.te
+@@ -10,8 +10,8 @@ r_dir_file(ppp, proc_net)
+ allow ppp mtp:socket rw_socket_perms;
+ 
+ # ioctls needed for VPN.
+-allowxperm ppp self:udp_socket ioctl priv_sock_ioctls;
+-allowxperm ppp mtp:socket ioctl ppp_ioctls;
++# [v26-strip] # [v26-strip] allowxperm ppp self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm ppp mtp:socket ioctl ppp_ioctls;
+ 
+ allow ppp mtp:unix_dgram_socket rw_socket_perms;
+ allow ppp ppp_device:chr_file rw_file_perms;
+diff --git a/prebuilts/api/27.0/public/racoon.te b/prebuilts/api/27.0/public/racoon.te
+index 00744d8f..4d96b572 100644
+--- a/prebuilts/api/27.0/public/racoon.te
++++ b/prebuilts/api/27.0/public/racoon.te
+@@ -5,7 +5,7 @@ type racoon_exec, exec_type, file_type;
+ typeattribute racoon mlstrustedsubject;
+ 
+ net_domain(racoon)
+-allowxperm racoon self:udp_socket ioctl { SIOCSIFFLAGS SIOCSIFADDR SIOCSIFNETMASK };
++# [v26-strip] # [v26-strip] allowxperm racoon self:udp_socket ioctl { SIOCSIFFLAGS SIOCSIFADDR SIOCSIFNETMASK };
+ 
+ binder_use(racoon)
+ 
+diff --git a/prebuilts/api/27.0/public/rild.te b/prebuilts/api/27.0/public/rild.te
+index 59cfd900..05079264 100644
+--- a/prebuilts/api/27.0/public/rild.te
++++ b/prebuilts/api/27.0/public/rild.te
+@@ -3,7 +3,7 @@ type rild, domain;
+ hal_server_domain(rild, hal_telephony)
+ 
+ net_domain(rild)
+-allowxperm rild self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm rild self:udp_socket ioctl priv_sock_ioctls;
+ 
+ allow rild self:netlink_route_socket nlmsg_write;
+ allow rild kernel:system module_request;
+diff --git a/prebuilts/api/27.0/public/shell.te b/prebuilts/api/27.0/public/shell.te
+index 9540cca0..da194533 100644
+--- a/prebuilts/api/27.0/public/shell.te
++++ b/prebuilts/api/27.0/public/shell.te
+@@ -170,7 +170,7 @@ allow shell sepolicy_file:file r_file_perms;
+ neverallow shell file_type:file link;
+ 
+ # Do not allow privileged socket ioctl commands
+-neverallowxperm shell domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
++# [v26-strip] neverallowxperm shell domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
+ 
+ # limit shell access to sensitive char drivers to
+ # only getattr required for host side test.
+diff --git a/prebuilts/api/27.0/public/te_macros b/prebuilts/api/27.0/public/te_macros
+index cac977b1..2443eb34 100644
+--- a/prebuilts/api/27.0/public/te_macros
++++ b/prebuilts/api/27.0/public/te_macros
+@@ -416,11 +416,11 @@ type $1_devpts, fs_type;
+ type_transition $1 devpts:chr_file $1_devpts;
+ # Allow use of the pty after creation.
+ allow $1 $1_devpts:chr_file { open getattr read write ioctl };
+-allowxperm $1 $1_devpts:chr_file ioctl unpriv_tty_ioctls;
++# [v26-strip] allowxperm $1 $1_devpts:chr_file ioctl unpriv_tty_ioctls;
+ # TIOCSTI is only ever used for exploits. Block it.
+ # b/33073072, b/7530569
+ # http://www.openwall.com/lists/oss-security/2016/09/26/14
+-neverallowxperm * $1_devpts:chr_file ioctl TIOCSTI;
++# [v26-strip] neverallowxperm * $1_devpts:chr_file ioctl TIOCSTI;
+ # Note: devpts:dir search and ptmx_device:chr_file rw_file_perms
+ # allowed to everyone via domain.te.
+ ')
+diff --git a/prebuilts/api/27.0/public/wificond.te b/prebuilts/api/27.0/public/wificond.te
+index c91053e7..c2cc365e 100644
+--- a/prebuilts/api/27.0/public/wificond.te
++++ b/prebuilts/api/27.0/public/wificond.te
+@@ -13,7 +13,7 @@ set_prop(wificond, ctl_default_prop)
+ # create sockets to set interfaces up and down
+ allow wificond self:udp_socket create_socket_perms;
+ # setting interface state up/down is a privileged ioctl
+-allowxperm wificond self:udp_socket ioctl { SIOCSIFFLAGS };
++# [v26-strip] # [v26-strip] allowxperm wificond self:udp_socket ioctl { SIOCSIFFLAGS };
+ allow wificond self:capability { net_admin net_raw };
+ # allow wificond to speak to nl80211 in the kernel
+ allow wificond self:netlink_socket create_socket_perms_no_ioctl;
+diff --git a/prebuilts/api/28.0/private/app_neverallows.te b/prebuilts/api/28.0/private/app_neverallows.te
+index cc78f0b7..671f4050 100644
+--- a/prebuilts/api/28.0/private/app_neverallows.te
++++ b/prebuilts/api/28.0/private/app_neverallows.te
+@@ -70,7 +70,7 @@ neverallow all_untrusted_apps sysfs:file no_rw_file_perms;
+ 
+ # Restrict socket ioctls. Either 1. disallow privileged ioctls, 2. disallow the
+ # ioctl permission, or 3. disallow the socket class.
+-neverallowxperm all_untrusted_apps domain:{ icmp_socket rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
++# [v26-strip] neverallowxperm all_untrusted_apps domain:{ icmp_socket rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
+ neverallow all_untrusted_apps *:{ netlink_route_socket netlink_selinux_socket } ioctl;
+ neverallow all_untrusted_apps *:{
+   socket netlink_socket packet_socket key_socket appletalk_socket
+diff --git a/prebuilts/api/28.0/private/bluetooth.te b/prebuilts/api/28.0/private/bluetooth.te
+index d4198553..f6d00c46 100644
+--- a/prebuilts/api/28.0/private/bluetooth.te
++++ b/prebuilts/api/28.0/private/bluetooth.te
+@@ -9,7 +9,7 @@ net_domain(bluetooth)
+ type_transition bluetooth bluetooth_data_file:sock_file bluetooth_socket;
+ 
+ # Allow access to net_admin ioctls
+-allowxperm bluetooth self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm bluetooth self:udp_socket ioctl priv_sock_ioctls;
+ 
+ wakelock_use(bluetooth);
+ 
+diff --git a/prebuilts/api/28.0/private/priv_app.te b/prebuilts/api/28.0/private/priv_app.te
+index 9ff8d091..7c9f281f 100644
+--- a/prebuilts/api/28.0/private/priv_app.te
++++ b/prebuilts/api/28.0/private/priv_app.te
+@@ -97,7 +97,7 @@ r_dir_file(priv_app, rootfs)
+ allow priv_app config_gz:file { open read getattr };
+ 
+ # access the mac address
+-allowxperm priv_app self:udp_socket ioctl SIOCGIFHWADDR;
++# [v26-strip] # [v26-strip] allowxperm priv_app self:udp_socket ioctl SIOCGIFHWADDR;
+ 
+ # Allow GMS core to communicate with update_engine for A/B update.
+ binder_call(priv_app, update_engine)
+diff --git a/prebuilts/api/28.0/private/system_server.te b/prebuilts/api/28.0/private/system_server.te
+index bbdd7ea5..2866446c 100644
+--- a/prebuilts/api/28.0/private/system_server.te
++++ b/prebuilts/api/28.0/private/system_server.te
+@@ -48,7 +48,7 @@ allow system_server zygote:unix_stream_socket { getopt getattr };
+ net_domain(system_server)
+ # in addition to ioctls whitelisted for all domains, also allow system_server
+ # to use privileged ioctls commands. Needed to set up VPNs.
+-allowxperm system_server self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm system_server self:udp_socket ioctl priv_sock_ioctls;
+ bluetooth_domain(system_server)
+ 
+ # These are the capabilities assigned by the zygote to the
+diff --git a/prebuilts/api/28.0/public/app.te b/prebuilts/api/28.0/public/app.te
+index 239332c1..7a48d3b7 100644
+--- a/prebuilts/api/28.0/public/app.te
++++ b/prebuilts/api/28.0/public/app.te
+@@ -301,8 +301,7 @@ use_keystore({ appdomain -isolated_app -ephemeral_app })
+ allow appdomain console_device:chr_file { read write };
+ 
+ # only allow unprivileged socket ioctl commands
+-allowxperm { appdomain -bluetooth } self:{ rawip_socket tcp_socket udp_socket }
+-  ioctl { unpriv_sock_ioctls unpriv_tty_ioctls };
++# [v26-strip] allowxperm { appdomain -bluetooth } self:{ rawip_socket tcp_socket udp_socket }
+ 
+ allow { appdomain -isolated_app } ion_device:chr_file rw_file_perms;
+ # TODO is write really necessary ?
+diff --git a/prebuilts/api/28.0/public/dnsmasq.te b/prebuilts/api/28.0/public/dnsmasq.te
+index e97e964e..f6ae36ab 100644
+--- a/prebuilts/api/28.0/public/dnsmasq.te
++++ b/prebuilts/api/28.0/public/dnsmasq.te
+@@ -3,7 +3,7 @@ type dnsmasq, domain;
+ type dnsmasq_exec, exec_type, file_type;
+ 
+ net_domain(dnsmasq)
+-allowxperm dnsmasq self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm dnsmasq self:udp_socket ioctl priv_sock_ioctls;
+ 
+ # TODO:  Run with dhcp group to avoid need for dac_override.
+ allow dnsmasq self:global_capability_class_set { dac_override dac_read_search };
+diff --git a/prebuilts/api/28.0/public/domain.te b/prebuilts/api/28.0/public/domain.te
+index 14f2f767..93fc7131 100644
+--- a/prebuilts/api/28.0/public/domain.te
++++ b/prebuilts/api/28.0/public/domain.te
+@@ -262,17 +262,15 @@ allow domain fs_type:dir getattr;
+ # defaults for all processes. Note that granting this whitelist to domain does
+ # not grant the ioctl permission on these socket types. That must be granted
+ # separately.
+-allowxperm domain domain:{ icmp_socket rawip_socket tcp_socket udp_socket }
+-  ioctl { unpriv_sock_ioctls unpriv_tty_ioctls };
++# [v26-strip] allowxperm domain domain:{ icmp_socket rawip_socket tcp_socket udp_socket }
+ # default whitelist for unix sockets.
+-allowxperm domain domain:{ unix_dgram_socket unix_stream_socket }
+-  ioctl unpriv_unix_sock_ioctls;
++# [v26-strip] allowxperm domain domain:{ unix_dgram_socket unix_stream_socket }
+ 
+ # Restrict PTYs to only whitelisted ioctls.
+ # Note that granting this whitelist to domain does
+ # not grant the wider ioctl permission. That must be granted
+ # separately.
+-allowxperm domain devpts:chr_file ioctl unpriv_tty_ioctls;
++# [v26-strip] # [v26-strip] allowxperm domain devpts:chr_file ioctl unpriv_tty_ioctls;
+ 
+ # Workaround for policy compiler being too aggressive and removing hwservice_manager_type
+ # when it's not explicitly used in allow rules
+@@ -289,16 +287,16 @@ with_asan(`allow domain system_data_file:dir getattr;')
+ ###
+ 
+ # All socket ioctls must be restricted to a whitelist.
+-neverallowxperm domain domain:socket_class_set ioctl { 0 };
++# [v26-strip] neverallowxperm domain domain:socket_class_set ioctl { 0 };
+ 
+ # b/68014825 and https://android-review.googlesource.com/516535
+ # rfc6093 says that processes should not use the TCP urgent mechanism
+-neverallowxperm domain domain:socket_class_set ioctl { SIOCATMARK };
++# [v26-strip] neverallowxperm domain domain:socket_class_set ioctl { SIOCATMARK };
+ 
+ # TIOCSTI is only ever used for exploits. Block it.
+ # b/33073072, b/7530569
+ # http://www.openwall.com/lists/oss-security/2016/09/26/14
+-neverallowxperm * devpts:chr_file ioctl TIOCSTI;
++# [v26-strip] neverallowxperm * devpts:chr_file ioctl TIOCSTI;
+ 
+ # Do not allow any domain other than init to create unlabeled files.
+ neverallow { domain -init -recovery } unlabeled:dir_file_class_set create;
+diff --git a/prebuilts/api/28.0/public/hal_cas.te b/prebuilts/api/28.0/public/hal_cas.te
+index 7f653585..6afbe0f2 100644
+--- a/prebuilts/api/28.0/public/hal_cas.te
++++ b/prebuilts/api/28.0/public/hal_cas.te
+@@ -32,4 +32,4 @@ allow hal_cas tee_device:chr_file rw_file_perms;
+ neverallow hal_cas_server { file_type fs_type }:file execute_no_trans;
+ 
+ # do not allow privileged socket ioctl commands
+-neverallowxperm hal_cas_server domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
++# [v26-strip] neverallowxperm hal_cas_server domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
+diff --git a/prebuilts/api/28.0/public/hal_drm.te b/prebuilts/api/28.0/public/hal_drm.te
+index a46dd911..11395722 100644
+--- a/prebuilts/api/28.0/public/hal_drm.te
++++ b/prebuilts/api/28.0/public/hal_drm.te
+@@ -38,8 +38,7 @@ allow hal_drm sysfs:file r_file_perms;
+ allow hal_drm tee_device:chr_file rw_file_perms;
+ 
+ # only allow unprivileged socket ioctl commands
+-allowxperm hal_drm self:{ rawip_socket tcp_socket udp_socket }
+-  ioctl { unpriv_sock_ioctls unpriv_tty_ioctls };
++# [v26-strip] allowxperm hal_drm self:{ rawip_socket tcp_socket udp_socket }
+ 
+ ###
+ ### neverallow rules
+@@ -50,4 +49,4 @@ allowxperm hal_drm self:{ rawip_socket tcp_socket udp_socket }
+ neverallow hal_drm_server { file_type fs_type }:file execute_no_trans;
+ 
+ # do not allow privileged socket ioctl commands
+-neverallowxperm hal_drm_server domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
++# [v26-strip] neverallowxperm hal_drm_server domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
+diff --git a/prebuilts/api/28.0/public/hal_telephony.te b/prebuilts/api/28.0/public/hal_telephony.te
+index 5f8cc41c..44bffb1d 100644
+--- a/prebuilts/api/28.0/public/hal_telephony.te
++++ b/prebuilts/api/28.0/public/hal_telephony.te
+@@ -5,7 +5,7 @@ binder_call(hal_telephony_server, hal_telephony_client)
+ add_hwservice(hal_telephony_server, hal_telephony_hwservice)
+ allow hal_telephony_client hal_telephony_hwservice:hwservice_manager find;
+ 
+-allowxperm hal_telephony_server self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm hal_telephony_server self:udp_socket ioctl priv_sock_ioctls;
+ 
+ allow hal_telephony_server self:netlink_route_socket nlmsg_write;
+ allow hal_telephony_server kernel:system module_request;
+diff --git a/prebuilts/api/28.0/public/hal_wifi.te b/prebuilts/api/28.0/public/hal_wifi.te
+index 7cea7c74..b3ca2d5a 100644
+--- a/prebuilts/api/28.0/public/hal_wifi.te
++++ b/prebuilts/api/28.0/public/hal_wifi.te
+@@ -13,7 +13,7 @@ set_prop(hal_wifi, wifi_prop)
+ 
+ # allow hal wifi set interfaces up and down
+ allow hal_wifi self:udp_socket create_socket_perms;
+-allowxperm hal_wifi self:udp_socket ioctl { SIOCSIFFLAGS SIOCSIFHWADDR };
++# [v26-strip] # [v26-strip] allowxperm hal_wifi self:udp_socket ioctl { SIOCSIFFLAGS SIOCSIFHWADDR };
+ 
+ allow hal_wifi self:global_capability_class_set { net_admin net_raw };
+ # allow hal_wifi to speak to nl80211 in the kernel
+diff --git a/prebuilts/api/28.0/public/hal_wifi_hostapd.te b/prebuilts/api/28.0/public/hal_wifi_hostapd.te
+index 03a55467..61545238 100644
+--- a/prebuilts/api/28.0/public/hal_wifi_hostapd.te
++++ b/prebuilts/api/28.0/public/hal_wifi_hostapd.te
+@@ -13,7 +13,7 @@ allow hal_wifi_hostapd_server sysfs_net:dir search;
+ allow hal_wifi_hostapd_server proc_net:file { getattr open read };
+ 
+ # Various socket permissions.
+-allowxperm hal_wifi_hostapd_server self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm hal_wifi_hostapd_server self:udp_socket ioctl priv_sock_ioctls;
+ allow hal_wifi_hostapd_server self:netlink_socket create_socket_perms_no_ioctl;
+ allow hal_wifi_hostapd_server self:netlink_generic_socket create_socket_perms_no_ioctl;
+ allow hal_wifi_hostapd_server self:packet_socket create_socket_perms_no_ioctl;
+diff --git a/prebuilts/api/28.0/public/hal_wifi_supplicant.te b/prebuilts/api/28.0/public/hal_wifi_supplicant.te
+index 6bf0d326..5b5abde8 100644
+--- a/prebuilts/api/28.0/public/hal_wifi_supplicant.te
++++ b/prebuilts/api/28.0/public/hal_wifi_supplicant.te
+@@ -6,7 +6,7 @@ add_hwservice(hal_wifi_supplicant_server, hal_wifi_supplicant_hwservice)
+ allow hal_wifi_supplicant_client hal_wifi_supplicant_hwservice:hwservice_manager find;
+ 
+ # in addition to ioctls whitelisted for all domains, grant hal_wifi_supplicant priv_sock_ioctls.
+-allowxperm hal_wifi_supplicant self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm hal_wifi_supplicant self:udp_socket ioctl priv_sock_ioctls;
+ 
+ r_dir_file(hal_wifi_supplicant, sysfs_type)
+ r_dir_file(hal_wifi_supplicant, proc_net)
+@@ -18,7 +18,7 @@ allow hal_wifi_supplicant self:netlink_route_socket nlmsg_write;
+ allow hal_wifi_supplicant self:netlink_socket create_socket_perms_no_ioctl;
+ allow hal_wifi_supplicant self:netlink_generic_socket create_socket_perms_no_ioctl;
+ allow hal_wifi_supplicant self:packet_socket create_socket_perms;
+-allowxperm hal_wifi_supplicant self:packet_socket ioctl { unpriv_sock_ioctls priv_sock_ioctls unpriv_tty_ioctls };
++# [v26-strip] # [v26-strip] allowxperm hal_wifi_supplicant self:packet_socket ioctl { unpriv_sock_ioctls priv_sock_ioctls unpriv_tty_ioctls };
+ 
+ ###
+ ### neverallow rules
+diff --git a/prebuilts/api/28.0/public/init.te b/prebuilts/api/28.0/public/init.te
+index 9eff0b0b..be072d86 100644
+--- a/prebuilts/api/28.0/public/init.te
++++ b/prebuilts/api/28.0/public/init.te
+@@ -429,7 +429,7 @@ allow init self:global_capability_class_set audit_write;
+ # Run "ifup lo" to bring up the localhost interface
+ allow init self:udp_socket { create ioctl };
+ # in addition to unpriv ioctls granted to all domains, init also needs:
+-allowxperm init self:udp_socket ioctl SIOCSIFFLAGS;
++# [v26-strip] # [v26-strip] allowxperm init self:udp_socket ioctl SIOCSIFFLAGS;
+ allow init self:global_capability_class_set net_raw;
+ 
+ # This line seems suspect, as it should not really need to
+diff --git a/prebuilts/api/28.0/public/mediadrmserver.te b/prebuilts/api/28.0/public/mediadrmserver.te
+index 123cb29a..b29f5e82 100644
+--- a/prebuilts/api/28.0/public/mediadrmserver.te
++++ b/prebuilts/api/28.0/public/mediadrmserver.te
+@@ -28,4 +28,4 @@ binder_call(mediadrmserver, mediacodec)
+ neverallow mediadrmserver { file_type fs_type }:file execute_no_trans;
+ 
+ # do not allow privileged socket ioctl commands
+-neverallowxperm mediadrmserver domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
++# [v26-strip] neverallowxperm mediadrmserver domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
+diff --git a/prebuilts/api/28.0/public/mediaserver.te b/prebuilts/api/28.0/public/mediaserver.te
+index f0c94edc..e5210977 100644
+--- a/prebuilts/api/28.0/public/mediaserver.te
++++ b/prebuilts/api/28.0/public/mediaserver.te
+@@ -112,8 +112,7 @@ allow mediaserver drmserver:drmservice {
+ };
+ 
+ # only allow unprivileged socket ioctl commands
+-allowxperm mediaserver self:{ rawip_socket tcp_socket udp_socket }
+-  ioctl { unpriv_sock_ioctls unpriv_tty_ioctls };
++# [v26-strip] allowxperm mediaserver self:{ rawip_socket tcp_socket udp_socket }
+ 
+ # Access to /data/media.
+ # This should be removed if sdcardfs is modified to alter the secontext for its
+@@ -144,4 +143,4 @@ binder_call(mediaserver, mediacodec)
+ neverallow mediaserver { file_type fs_type }:file execute_no_trans;
+ 
+ # do not allow privileged socket ioctl commands
+-neverallowxperm mediaserver domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
++# [v26-strip] neverallowxperm mediaserver domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
+diff --git a/prebuilts/api/28.0/public/netd.te b/prebuilts/api/28.0/public/netd.te
+index a550b258..f1667091 100644
+--- a/prebuilts/api/28.0/public/netd.te
++++ b/prebuilts/api/28.0/public/netd.te
+@@ -4,7 +4,7 @@ type netd_exec, exec_type, file_type;
+ 
+ net_domain(netd)
+ # in addition to ioctls whitelisted for all domains, grant netd priv_sock_ioctls.
+-allowxperm netd self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm netd self:udp_socket ioctl priv_sock_ioctls;
+ 
+ r_dir_file(netd, cgroup)
+ 
+diff --git a/prebuilts/api/28.0/public/ppp.te b/prebuilts/api/28.0/public/ppp.te
+index 9340dee8..f4bc358e 100644
+--- a/prebuilts/api/28.0/public/ppp.te
++++ b/prebuilts/api/28.0/public/ppp.te
+@@ -10,8 +10,8 @@ r_dir_file(ppp, proc_net)
+ allow ppp mtp:socket rw_socket_perms;
+ 
+ # ioctls needed for VPN.
+-allowxperm ppp self:udp_socket ioctl priv_sock_ioctls;
+-allowxperm ppp mtp:socket ioctl ppp_ioctls;
++# [v26-strip] # [v26-strip] allowxperm ppp self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm ppp mtp:socket ioctl ppp_ioctls;
+ 
+ allow ppp mtp:unix_dgram_socket rw_socket_perms;
+ allow ppp ppp_device:chr_file rw_file_perms;
+diff --git a/prebuilts/api/28.0/public/racoon.te b/prebuilts/api/28.0/public/racoon.te
+index c759217a..d998c1d6 100644
+--- a/prebuilts/api/28.0/public/racoon.te
++++ b/prebuilts/api/28.0/public/racoon.te
+@@ -5,7 +5,7 @@ type racoon_exec, exec_type, file_type;
+ typeattribute racoon mlstrustedsubject;
+ 
+ net_domain(racoon)
+-allowxperm racoon self:udp_socket ioctl { SIOCSIFFLAGS SIOCSIFADDR SIOCSIFNETMASK };
++# [v26-strip] # [v26-strip] allowxperm racoon self:udp_socket ioctl { SIOCSIFFLAGS SIOCSIFADDR SIOCSIFNETMASK };
+ 
+ binder_use(racoon)
+ 
+diff --git a/prebuilts/api/28.0/public/shell.te b/prebuilts/api/28.0/public/shell.te
+index 43ec6191..121286fd 100644
+--- a/prebuilts/api/28.0/public/shell.te
++++ b/prebuilts/api/28.0/public/shell.te
+@@ -212,7 +212,7 @@ allow shell vendor_shell_exec:file rx_file_perms;
+ neverallow shell file_type:file link;
+ 
+ # Do not allow privileged socket ioctl commands
+-neverallowxperm shell domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
++# [v26-strip] neverallowxperm shell domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
+ 
+ # limit shell access to sensitive char drivers to
+ # only getattr required for host side test.
+diff --git a/prebuilts/api/28.0/public/te_macros b/prebuilts/api/28.0/public/te_macros
+index dcebbefa..309edffc 100644
+--- a/prebuilts/api/28.0/public/te_macros
++++ b/prebuilts/api/28.0/public/te_macros
+@@ -424,11 +424,11 @@ type $1_devpts, fs_type;
+ type_transition $1 devpts:chr_file $1_devpts;
+ # Allow use of the pty after creation.
+ allow $1 $1_devpts:chr_file { open getattr read write ioctl };
+-allowxperm $1 $1_devpts:chr_file ioctl unpriv_tty_ioctls;
++# [v26-strip] allowxperm $1 $1_devpts:chr_file ioctl unpriv_tty_ioctls;
+ # TIOCSTI is only ever used for exploits. Block it.
+ # b/33073072, b/7530569
+ # http://www.openwall.com/lists/oss-security/2016/09/26/14
+-neverallowxperm * $1_devpts:chr_file ioctl TIOCSTI;
++# [v26-strip] neverallowxperm * $1_devpts:chr_file ioctl TIOCSTI;
+ # Note: devpts:dir search and ptmx_device:chr_file rw_file_perms
+ # allowed to everyone via domain.te.
+ ')
+diff --git a/prebuilts/api/28.0/public/wificond.te b/prebuilts/api/28.0/public/wificond.te
+index 9e4dc7d3..bd5138fd 100644
+--- a/prebuilts/api/28.0/public/wificond.te
++++ b/prebuilts/api/28.0/public/wificond.te
+@@ -14,7 +14,7 @@ set_prop(wificond, ctl_default_prop)
+ # create sockets to set interfaces up and down
+ allow wificond self:udp_socket create_socket_perms;
+ # setting interface state up/down is a privileged ioctl
+-allowxperm wificond self:udp_socket ioctl { SIOCSIFFLAGS SIOCSIFHWADDR };
++# [v26-strip] # [v26-strip] allowxperm wificond self:udp_socket ioctl { SIOCSIFFLAGS SIOCSIFHWADDR };
+ allow wificond self:global_capability_class_set { net_admin net_raw };
+ # allow wificond to speak to nl80211 in the kernel
+ allow wificond self:netlink_socket create_socket_perms_no_ioctl;
+diff --git a/prebuilts/api/28.0/public/wpantund.te b/prebuilts/api/28.0/public/wpantund.te
+index b3172365..acb81339 100644
+--- a/prebuilts/api/28.0/public/wpantund.te
++++ b/prebuilts/api/28.0/public/wpantund.te
+@@ -21,7 +21,7 @@ allow wpantund {priv_app shell}:binder call;
+ allow wpantund self:udp_socket create_socket_perms;
+ 
+ # setting interface state up/down and changing MTU are privileged ioctls
+-allowxperm wpantund self:udp_socket ioctl { SIOCSIFFLAGS SIOCSIFMTU };
++# [v26-strip] # [v26-strip] allowxperm wpantund self:udp_socket ioctl { SIOCSIFFLAGS SIOCSIFMTU };
+ 
+ # Allow us to bring up a TUN network interface.
+ allow wpantund tun_device:chr_file rw_file_perms;
+diff --git a/private/app_neverallows.te b/private/app_neverallows.te
+index cc78f0b7..671f4050 100644
+--- a/private/app_neverallows.te
++++ b/private/app_neverallows.te
+@@ -70,7 +70,7 @@ neverallow all_untrusted_apps sysfs:file no_rw_file_perms;
+ 
+ # Restrict socket ioctls. Either 1. disallow privileged ioctls, 2. disallow the
+ # ioctl permission, or 3. disallow the socket class.
+-neverallowxperm all_untrusted_apps domain:{ icmp_socket rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
++# [v26-strip] neverallowxperm all_untrusted_apps domain:{ icmp_socket rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
+ neverallow all_untrusted_apps *:{ netlink_route_socket netlink_selinux_socket } ioctl;
+ neverallow all_untrusted_apps *:{
+   socket netlink_socket packet_socket key_socket appletalk_socket
+diff --git a/private/bluetooth.te b/private/bluetooth.te
+index d4198553..f6d00c46 100644
+--- a/private/bluetooth.te
++++ b/private/bluetooth.te
+@@ -9,7 +9,7 @@ net_domain(bluetooth)
+ type_transition bluetooth bluetooth_data_file:sock_file bluetooth_socket;
+ 
+ # Allow access to net_admin ioctls
+-allowxperm bluetooth self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm bluetooth self:udp_socket ioctl priv_sock_ioctls;
+ 
+ wakelock_use(bluetooth);
+ 
+diff --git a/private/file_contexts b/private/file_contexts
+index e3b37b80..887fc95b 100644
+--- a/private/file_contexts
++++ b/private/file_contexts
+@@ -1,3 +1,41 @@
++# pisces: BT (BCM43341) and modem UARTs live on these legacy tty nodes
++/dev/ttyHS[0-9]*	u:object_r:serial_device:s0
++/dev/ttySC[0-9]*	u:object_r:serial_device:s0
++
++# pisces: Tegra 4 graphics device nodes.  Without these the nodes keep the
++# devtmpfs default "device" label and both surfaceflinger (via gralloc) and
++# the HWC fail to open them under enforcing.
++/dev/nvmap		u:object_r:gpu_device:s0
++/dev/knvmap		u:object_r:gpu_device:s0
++/dev/nvhost-ctrl	u:object_r:gpu_device:s0
++/dev/nvhost-ctrl-gpu	u:object_r:gpu_device:s0
++/dev/nvhost-gpu		u:object_r:gpu_device:s0
++/dev/nvhost-gr2d	u:object_r:gpu_device:s0
++/dev/nvhost-gr3d	u:object_r:gpu_device:s0
++/dev/nvhost-ctrl-gr2d	u:object_r:gpu_device:s0
++/dev/nvhost-ctrl-gr3d	u:object_r:gpu_device:s0
++/dev/nvhost-ctrl-vi	u:object_r:gpu_device:s0
++/dev/nvhost-vi		u:object_r:gpu_device:s0
++/dev/nvhost-isp		u:object_r:gpu_device:s0
++/dev/nvhost-ctrl-isp	u:object_r:gpu_device:s0
++/dev/nvhost-tsec	u:object_r:gpu_device:s0
++/dev/nvhost-ctrl-tsec	u:object_r:gpu_device:s0
++/dev/nvhost-msenc	u:object_r:gpu_device:s0
++/dev/nvhost-ctrl-msenc	u:object_r:gpu_device:s0
++/dev/tegra_sema		u:object_r:gpu_device:s0
++
++# pisces: camera sensor / flash nodes.  Without these they keep the devtmpfs
++# "device" label, which only grants directory search, so the vendor camera HAL
++# cannot open the sensor (/dev/imx135), the VCM (/dev/focuser) or the flash
++# (/dev/torch) and NvCameraHal::open() fails with NvError 0x3:
++#   NvOsDebugPrintf: Error: Can't open /dev/nvhost-ctrl
++#   NvCameraHal: setupHalInLock:539 failed to open camera! Error: 0x3
++/dev/imx13[0-9]	u:object_r:camera_device:s0
++/dev/imx[0-9]+		u:object_r:camera_device:s0
++/dev/ov[0-9]+		u:object_r:camera_device:s0
++/dev/focuser		u:object_r:camera_device:s0
++/dev/torch		u:object_r:camera_device:s0
++/dev/mipi-cal		u:object_r:camera_device:s0
+ ###########################################
+ # Root
+ /                   u:object_r:rootfs:s0
+@@ -121,6 +159,7 @@
+ /dev/rproc_user	u:object_r:rpmsg_device:s0
+ /dev/rtc[0-9]      u:object_r:rtc_device:s0
+ /dev/snd(/.*)?		u:object_r:audio_device:s0
++/dev/snd/controlC0	u:object_r:audio_control_device:s0
+ /dev/snd/audio_timer_device	u:object_r:audio_timer_device:s0
+ /dev/snd/audio_seq_device	u:object_r:audio_seq_device:s0
+ /dev/socket(/.*)?	u:object_r:socket_device:s0
+@@ -404,6 +443,7 @@
+ /data/misc/bluedroid/\.a2dp_ctrl u:object_r:bluetooth_socket:s0
+ /data/misc/bluedroid/\.a2dp_data u:object_r:bluetooth_socket:s0
+ /data/misc/camera(/.*)?         u:object_r:camera_data_file:s0
++/data/misc/pisces_camera(/.*)?  u:object_r:camera_data_file:s0
+ /data/misc/carrierid(/.*)?      u:object_r:radio_data_file:s0
+ /data/misc/dhcp(/.*)?           u:object_r:dhcp_data_file:s0
+ /data/misc/dhcp-6.8.2(/.*)?     u:object_r:dhcp_data_file:s0
+@@ -543,3 +583,10 @@
+ #############################
+ # mount point for read-write product partitions
+ /mnt/product(/.*)?          u:object_r:mnt_product_file:s0
++/system/bin/media_omx_service	u:object_r:media_omx_exec:s0
++/system/bin/vpcmd	u:object_r:es325_fw_exec:s0
++/system/bin/pisces_cpu	u:object_r:pisces_cpu_exec:s0
++/dev/ts0710mux[0-9]*	u:object_r:radio_device:s0
++/system/bin/fild	u:object_r:fild_exec:s0
++/data/fild(/.*)?	u:object_r:fild_data_file:s0
++/dev/sysmatdrv	u:object_r:radio_device:s0
+diff --git a/private/fs_use b/private/fs_use
+index d351c368..eb9db200 100644
+--- a/private/fs_use
++++ b/private/fs_use
+@@ -9,6 +9,12 @@ fs_use_xattr btrfs u:object_r:labeledfs:s0;
+ fs_use_xattr f2fs u:object_r:labeledfs:s0;
+ fs_use_xattr squashfs u:object_r:labeledfs:s0;
+ fs_use_xattr erofs u:object_r:labeledfs:s0;
++# pisces: the 3.4 kernel boots a ramfs rootfs (rootfs only became tmpfs in
++# 3.8).  Our kernel's ramfs stores real security.* xattrs now, so label the
++# initramfs from them.  Without this the whole rootfs is a genfs filesystem
++# and every inode is stuck at rootfs_t, so /init can never get init_exec and
++# the kernel domain is denied execve("/init").
++fs_use_xattr rootfs u:object_r:rootfs:s0;
+ 
+ # Label inodes from task label.
+ fs_use_task pipefs u:object_r:pipefs:s0;
+diff --git a/private/genfs_contexts b/private/genfs_contexts
+index 6b8a6f58..02962045 100644
+--- a/private/genfs_contexts
++++ b/private/genfs_contexts
+@@ -99,6 +99,17 @@ genfscon sysfs / u:object_r:sysfs:s0
+ genfscon sysfs /devices/system/cpu u:object_r:sysfs_devices_system_cpu:s0
+ genfscon sysfs /class/android_usb                 u:object_r:sysfs_android_usb:s0
+ genfscon sysfs /class/leds                        u:object_r:sysfs_leds:s0
++# /sys/class/leds is a symlink: the inode's canonical path lives below
++# /sys/devices/virtual/leds, so the /class/leds rule never matches and every
++# LED (flashlight included) kept the generic sysfs label.
++genfscon sysfs /devices/virtual/leds u:object_r:sysfs_leds:s0
++# The real LED devices are not under /devices/virtual: the notification RGB
++# and button LEDs hang off the 0-0038 LED controller and the camera flash off
++# the max77665 MFD cell, so label those subtrees too (longest prefix wins).
++genfscon sysfs /devices/platform/tegra11-i2c.0/i2c-0/0-0038/leds u:object_r:sysfs_leds:s0
++genfscon sysfs /devices/platform/tegra11-i2c.4/i2c-4/4-0066/max77665-flash/leds u:object_r:sysfs_leds:s0
++genfscon sysfs /devices/platform/sdhci-tegra.0/leds u:object_r:sysfs_leds:s0
++genfscon sysfs /devices/platform/sdhci-tegra.3/leds u:object_r:sysfs_leds:s0
+ genfscon sysfs /class/net                         u:object_r:sysfs_net:s0
+ genfscon sysfs /class/rtc                         u:object_r:sysfs_rtc:s0
+ genfscon sysfs /class/switch                      u:object_r:sysfs_switch:s0
+@@ -248,3 +259,16 @@ genfscon functionfs / u:object_r:functionfs:s0
+ genfscon usbfs / u:object_r:usbfs:s0
+ genfscon binfmt_misc / u:object_r:binfmt_miscfs:s0
+ genfscon bpf / u:object_r:fs_bpf:s0
++genfscon proc /pisces_kmsg u:object_r:proc_pisces_kmsg:s0
++genfscon sysfs /module/cpuidle u:object_r:sysfs_cpuidle:s0
++genfscon sysfs /module/cpuidle_t11x u:object_r:sysfs_cpuidle:s0
++genfscon sysfs /module/tegra11_emc u:object_r:sysfs_emc:s0
++genfscon sysfs /module/tegra_fuse u:object_r:sysfs_tegra_fuse:s0
++genfscon sysfs /class/backlight u:object_r:sysfs_leds:s0
++genfscon sysfs /class/rfkill u:object_r:sysfs_rfkill:s0
++
++# pisces: /sys/class/rfkill/rfkill0 is a symlink; the real bcmdhd/bluedroid_pm
++# nodes live under the platform device.  Without this the bluetooth HAL and
++# init (chmod 0660 + power toggling) are denied on the canonical path.
++genfscon sysfs /devices/platform/bluedroid_pm/rfkill u:object_r:sysfs_rfkill:s0
++genfscon sysfs /devices/virtual/rfkill u:object_r:sysfs_rfkill:s0
+diff --git a/private/pisces.te b/private/pisces.te
+new file mode 100644
+index 00000000..8e453eed
+--- /dev/null
++++ b/private/pisces.te
+@@ -0,0 +1,262 @@
++# pisces: workarounds caused by running a modern policy on a 3.4 kernel.
++#
++# On this kernel the per-node sysfs labels from genfs_contexts do not take
++# effect: everything below /sys ends up with the generic sysfs type instead of
++# sysfs_lowmemorykiller / sysfs_power / sysfs_devices_system_cpu / ...  The
++# msm8974 (cancro/virgo, Mi 3 WCDMA / Mi 4 / Mi Note) 3.4 trees carry the same
++# workaround in their device sepolicy:
++#
++#   sepolicy/init.te : allow init sysfs:file { setattr rw_file_perms };
++#   sepolicy/lmkd.te : allow lmkd sysfs:file write;
++#
++# Consequences without it:
++#   * init cannot chown/chmod /sys/module/lowmemorykiller/parameters/* nor
++#     /sys/power/* (init.rc "boot" action), and
++#   * lmkd's access("/sys/module/lowmemorykiller/parameters/minfree", W_OK)
++#     fails, so lmkd falls back to PSI/vmpressure (not available on 3.4),
++#     exits, and init reboots the device because lmkd is a critical service:
++#     "critical process 'lmkd' exited 4 times in 4 minutes".
++#
++# init may only get setattr here: AOSP already has
++#   neverallow init sysfs:file { open read write };
++allow init sysfs:file setattr;
++
++# lmkd needs getattr/open/write/append to program the in-kernel LMK.
++allow lmkd sysfs:file w_file_perms;
++
++# ---- generic sysfs grants for the enforcing bring-up ----------------------
++# On 3.4 the per-node sysfs labels are not applied (see above), so every
++# service that AOSP expects to find a sysfs_* type has to be granted on the
++# generic sysfs type instead.  Only domains that exist in the Android 9 policy
++# are listed here; the hal_*_default domains used by the earlier msm8974 trees
++# are Android 10+ and do not exist here.
++allow hwservicemanager sysfs:file r_file_perms;
++allow drmserver sysfs:file r_file_perms;
++allow toolbox sysfs:file r_file_perms;
++allow vold_prepare_subdirs sysfs:file r_file_perms;
++allow zygote sysfs:file r_file_perms;
++allow shell sysfs:file r_file_perms;
++
++# init programs the USB gadget through sysfs (init.modem_sprd.rc) and needs to
++# write those nodes for adbd to ever come up.
++allow init sysfs_android_usb:file w_file_perms;
++
++# init.rc programs the CPU governor and USB gadget through sysfs, and vold
++# reads the /proc/mounts symlink (a symlink on 3.4, a file on 4.x).
++allow init sysfs_devices_system_cpu:file w_file_perms;
++allow init sysfs_android_usb:file r_file_perms;
++allow init sysfs_android_usb:lnk_file r_file_perms;
++allow vold proc_mounts:lnk_file r_file_perms;
++
++# /proc/pisces_kmsg: the kernel log, exposed by the log saver so adb shell can
++# read SELinux denials on a running enforcing device (shell cannot read the
++# kernel log through klogctl and there is no root without Magisk).
++type proc_pisces_kmsg, fs_type, proc_type;
++allow shell proc_pisces_kmsg:file r_file_perms;
++
++# The Tegra EGL/gralloc code checks /sys/.../tegra_chip_id and tegra_chip_rev
++# at startup; without the read it dereferences what it got and crashes.
++allow surfaceflinger sysfs:file r_file_perms;
++
++# Every 32-bit exec makes the kernel request a binfmt-personality module; the
++# denial is harmless but the rate-limited audit buffer then drops the denials
++# that actually matter.
++allow domain kernel:system module_request;
++
++# pisces: init programs the Tegra power/thermal knobs under /sys/module and
++# the host1x devfreq nodes.  Give them real types so the (neverallow-protected)
++# generic sysfs type does not block init's writes.
++type sysfs_cpuidle, fs_type, sysfs_type;
++type sysfs_emc, fs_type, sysfs_type;
++allow init sysfs_cpuidle:file rw_file_perms;
++allow init sysfs_emc:file rw_file_perms;
++
++
++# The Android linker resolves memfd-backed libraries (the NVIDIA GL driver
++# loads libcgdrv.so that way) through /proc/self/fd/N; without the readlink the
++# driver comes up half-initialised and every GPU submission times out.
++allow domain proc:lnk_file r_file_perms;
++
++# The NVIDIA GL driver identifies the SoC by reading the tegra_fuse module
++# parameters.  Without them it falls back to "Tegra2", computes the wrong GPU
++# parameters and every gr3d submission times out (the display then stays black
++# because surfaceflinger blocks forever on the first fence).  The values are
++# public SoC information, so everybody may read them.
++type sysfs_tegra_fuse, fs_type, sysfs_type;
++allow { domain -isolated_app } sysfs_tegra_fuse:file r_file_perms;
++allow { domain -isolated_app } sysfs_tegra_fuse:dir r_dir_perms;
++
++# Battery (max170xx) and charger nodes are plain sysfs on this kernel, and
++# healthd reads them through /sys/class/power_supply; without it the framework
++# reports present=false and shows the red "!" instead of a percentage.
++allow healthd sysfs:file r_file_perms;
++allow healthd sysfs:dir r_dir_perms;
++allow charger sysfs:file r_file_perms;
++allow charger sysfs:dir r_dir_perms;
++
++# init sets the panel brightness from init.pisces.rc.
++allow init sysfs_leds:file rw_file_perms;
++
++# Camera: the tegra shim stores per-sensor parameters under /data.
++allow cameraserver system_data_file:file r_file_perms;
++allow cameraserver system_data_file:dir r_dir_perms;
++# ... and the newer shim keeps them in /data/misc/pisces_camera
++# (labeled camera_data_file).  cameraserver reads the blobs the camera HAL
++# wrote there; without it the camera shim falls back to default parameters.
++allow cameraserver camera_data_file:dir r_dir_perms;
++allow cameraserver camera_data_file:file r_file_perms;
++allow cameraserver camera_data_file:file w_file_perms;
++
++# Several device services run in the init domain on this board (fild, the
++# tegra AVP channel users) and need the legacy tty / video nodes.
++allow init serial_device:chr_file rw_file_perms;
++allow init video_device:chr_file rw_file_perms;
++
++# /sys/class/rfkill controls the BCM43341 power; init drives it at boot and the
++# BT HAL reads it back.  Without the label init's write is blocked by the
++# generic-sysfs neverallow and the chip never powers up (HCI commands time out).
++# init also chmod/chown the rfkill nodes for the bluetooth user, which needs
++# setattr: without it the nodes stay root:root 0644 and bt_upio cannot power
++# the chip on ("open(.../state) for write failed: Permission denied").
++allow init sysfs_rfkill:file { rw_file_perms setattr };
++allow init sysfs_rfkill:dir r_dir_perms;
++allow bluetooth sysfs_rfkill:file r_file_perms;
++allow bluetooth sysfs_rfkill:dir r_dir_perms;
++
++# The BT HAL (bt_upio in android.hardware.bluetooth@1.0-impl) powers the
++# BCM43341 through /sys/class/rfkill/rfkill0/state and reads .../type back.
++# Without it every HCI download times out:
++#   bt_upio: init_rfkill : open(/sys/class/rfkill/rfkill0/type) failed: EACCES
++#   bt_core_module: module_start_up Failed to start up module "hci_module"
++# ---- audit-spam / real gaps found on the 2026-11-12 enforcing boot --------
++# storaged polls /sys/block/mmcblk0/stat, which is plain sysfs on this kernel
++# (there is no genfscon for /block), so r_dir_file(storaged, sysfs_disk_stat)
++# never matches: 458 denials per boot, all dropped by the audit rate limit.
++allow storaged sysfs:file r_file_perms;
++allow storaged sysfs:dir r_dir_perms;
++
++# netd keeps the 3.4 qtaguid accounting alive by writing
++# /proc/net/xt_qtaguid/ctrl; the /proc/net path is not labeled on this kernel,
++# so the write lands on the generic proc type (2650 denials per boot).
++allow netd proc:file w_file_perms;
++
++# fild (the Xiaomi factory daemon) runs in the init domain and keeps reading
++# its netlink kobject-uevent socket.  Denying the read makes it poll in a tight
++# loop: "audit_lost" grew by ~20-30k messages per second and the rate limiter
++# (5/s) threw away every other denial in the buffer, including the camera
++# ones.  Reading the socket is harmless, so let it through.
++allow init self:netlink_kobject_uevent_socket { read write };
++
++# The FUSE storage daemon chowns/chmods /data/media/0/DCIM/Camera when the
++# camera app creates it; without CAP_FOWNER the chmod fails and the directory
++# keeps the wrong mode ("sdcard: chmod failed ... Operation not permitted").
++allow sdcardd self:global_capability_class_set { dac_override fowner };
++
++# CameraService walks /sys/class/leds while resolving the torch target (it is
++# a symlink to /sys/devices/virtual/leds, which is now labeled sysfs_leds).
++# The coredomain neverallow only covers sysfs_leds:file, not the directory.
++allow cameraserver sysfs_leds:dir r_dir_perms;
++allow cameraserver sysfs_leds:lnk_file read;
++
++# Debug aid: adb shell (uid 2000) must be able to open the ALSA control node to
++# run tinymix while the ES325 -> CS42L73 path is being debugged.
++allow shell audio_control_device:chr_file rw_file_perms;
++allow audioserver audio_control_device:chr_file rw_file_perms;
++
++
++# pisces: AudioFlinger's ApmOutput thread takes /sys/power/wake_lock for the
++# duration of playback.  Without it the write path bails out and the primary
++# output stays silent under enforcing (permissive hides it).
++allow audioserver sysfs_wake_lock:dir r_dir_perms;
++allow audioserver sysfs_wake_lock:file rw_file_perms;
++
++# pisces: /system/bin/media_omx_service runs the Nvidia OMX HIDL HAL from the
++# system partition (it needs the Nvidia OMX components in /system/lib).  init
++# may not exec a plain system_file, so give the binary its own exec type and
++# transition into the AOSP "mediacodec" media-HAL domain.
++type media_omx_exec, exec_type, file_type;
++domain_auto_trans(init, media_omx_exec, mediacodec)
++
++# pisces: the ES325 firmware is downloaded over /dev/ttyHS3 by vpcmd at boot.
++# It used to run as "init exec /system/bin/sh script", which SELinux cannot
++# allow (init may not exec shell), so under enforcing the DSP never got its
++# firmware and the whole audio path stayed silent.  Run vpcmd directly in its
++# own daemon domain instead.
++type es325_fw, domain;
++type es325_fw_exec, exec_type, file_type;
++init_daemon_domain(es325_fw)
++allow es325_fw serial_device:chr_file rw_file_perms;
++allow es325_fw system_file:file { read open getattr map execute };
++allow es325_fw system_file:dir { open read getattr search };
++allow es325_fw self:process { execmem };
++# vpcmd resets the chip through /sys/esxxx/reset and reads uart_download
++allow es325_fw sysfs:dir r_dir_perms;
++allow es325_fw sysfs:file rw_file_perms;
++
++# pisces: CPU hotplug/frequency tuning used to run as a shell script started by
++# init, which enforcing forbids (init -> shell_exec execute_no_trans).  Run the
++# C replacement in its own domain so it can still program cpufreq.
++type pisces_cpu, domain;
++type pisces_cpu_exec, exec_type, file_type;
++init_daemon_domain(pisces_cpu)
++allow pisces_cpu sysfs:dir r_dir_perms;
++allow pisces_cpu sysfs:file rw_file_perms;
++allow pisces_cpu sysfs_devices_system_cpu:dir r_dir_perms;
++allow pisces_cpu sysfs_devices_system_cpu:file rw_file_perms;
++allow pisces_cpu system_file:file { read open getattr map execute };
++allow pisces_cpu self:process { execmem };
++get_prop(pisces_cpu, exported3_system_prop)
++
++# pisces: fild loads the Spreadtrum modem firmware over SPI (fdl1.bin etc.) and
++# keeps the modem alive.  Under enforcing init cannot exec it (126/127), the
++# modem never boots, rild's AT channel fails and rild crashes in the vendor
++# blob ("at_channel_writer_destroy"), which is why the baseband stayed
++# "unknown".  Run it in its own daemon domain.
++type fild_data_file, file_type, data_file_type, core_data_file_type;
++type fild, domain;
++type fild_exec, exec_type, file_type;
++init_daemon_domain(fild)
++allow fild system_file:file { read open getattr map execute execute_no_trans };
++allow fild system_file:dir { read open getattr search };
++allow fild radio_device:chr_file rw_file_perms;
++allow fild radio_device:dir r_dir_perms;
++allow fild serial_device:chr_file rw_file_perms;
++allow fild sysfs:dir r_dir_perms;
++allow fild sysfs:file rw_file_perms;
++allow fild sysfs_wake_lock:dir r_dir_perms;
++allow fild sysfs_wake_lock:file rw_file_perms;
++allow fild self:process execmem;
++# fild creates /data/fild on its own (the port's restorecon cannot relabel it)
++allow fild system_data_file:dir { create write add_name };
++# the port's restorecon cannot relabel /data/fild, so the fifo lands in the
++# generic data type
++allow fild system_data_file:fifo_file { create open read write getattr };
++allow fild fild_data_file:dir rw_dir_perms;
++allow fild fild_data_file:file rw_file_perms;
++# The state fifo is labeled fild_data_file (plat_file_contexts has
++# /data/fild(/.*)?), so the file rule above does not cover it.  Without this
++# fild's main loop cannot read the modem state and treats every read as 0:
++#   avc: denied { read } ... tclass=fifo_file
++allow fild fild_data_file:fifo_file rw_file_perms;
++
++# fild keeps a second thread on a kobject-uevent netlink socket: it parses
++# SC8800G_MDM_STATE=... events and forwards them to the state fifo.  When the
++# socket creation was denied the whole thread exited before it ever wrote the
++# initial state, so the main loop spun on "Modem power is off":
++#   avc: denied { create } ... tclass=netlink_kobject_uevent_socket
++allow fild self:netlink_kobject_uevent_socket { create bind read write setopt };
++
++# fild does not use file I/O for modem power/reset: it runs
++#   system("echo 1 > /sys/class/spi_master/spi0/spi0.0/pwr_onoff")
++# (and the same for reset / gpio56 / usb_switch) through /system/bin/sh.
++# Without the shell exec below every power-on attempt fails with
++#   avc: denied { execute } for name="sh" scontext=u:r:fild:s0
++# and fild loops forever on "Modem power is off, try to turn it on.".
++# There is no domain transition, so sh keeps the fild context and the generic
++# sysfs write above covers the actual store.
++allow fild shell_exec:file rx_file_perms;
++
++# fild stops ril-daemon before downloading the modem images and starts it
++# again once the modem is ACTIVE ("stop ril-daemon"/"start ril-daemon").
++set_prop(fild, ctl_start_prop)
++set_prop(fild, ctl_stop_prop)
+diff --git a/private/priv_app.te b/private/priv_app.te
+index 9ff8d091..7c9f281f 100644
+--- a/private/priv_app.te
++++ b/private/priv_app.te
+@@ -97,7 +97,7 @@ r_dir_file(priv_app, rootfs)
+ allow priv_app config_gz:file { open read getattr };
+ 
+ # access the mac address
+-allowxperm priv_app self:udp_socket ioctl SIOCGIFHWADDR;
++# [v26-strip] # [v26-strip] allowxperm priv_app self:udp_socket ioctl SIOCGIFHWADDR;
+ 
+ # Allow GMS core to communicate with update_engine for A/B update.
+ binder_call(priv_app, update_engine)
+diff --git a/private/system_server.te b/private/system_server.te
+index 2b939e0d..142ff5a3 100644
+--- a/private/system_server.te
++++ b/private/system_server.te
+@@ -48,7 +48,7 @@ allow system_server zygote:unix_stream_socket { getopt getattr };
+ net_domain(system_server)
+ # in addition to ioctls whitelisted for all domains, also allow system_server
+ # to use privileged ioctls commands. Needed to set up VPNs.
+-allowxperm system_server self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm system_server self:udp_socket ioctl priv_sock_ioctls;
+ bluetooth_domain(system_server)
+ 
+ # These are the capabilities assigned by the zygote to the
+diff --git a/public/app.te b/public/app.te
+index 239332c1..7a48d3b7 100644
+--- a/public/app.te
++++ b/public/app.te
+@@ -301,8 +301,7 @@ use_keystore({ appdomain -isolated_app -ephemeral_app })
+ allow appdomain console_device:chr_file { read write };
+ 
+ # only allow unprivileged socket ioctl commands
+-allowxperm { appdomain -bluetooth } self:{ rawip_socket tcp_socket udp_socket }
+-  ioctl { unpriv_sock_ioctls unpriv_tty_ioctls };
++# [v26-strip] allowxperm { appdomain -bluetooth } self:{ rawip_socket tcp_socket udp_socket }
+ 
+ allow { appdomain -isolated_app } ion_device:chr_file rw_file_perms;
+ # TODO is write really necessary ?
+diff --git a/public/dnsmasq.te b/public/dnsmasq.te
+index a7849c0d..b2b969d0 100644
+--- a/public/dnsmasq.te
++++ b/public/dnsmasq.te
+@@ -3,7 +3,7 @@ type dnsmasq, domain;
+ type dnsmasq_exec, exec_type, file_type;
+ 
+ net_domain(dnsmasq)
+-allowxperm dnsmasq self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm dnsmasq self:udp_socket ioctl priv_sock_ioctls;
+ 
+ # TODO:  Run with dhcp group to avoid need for dac_override.
+ allow dnsmasq self:global_capability_class_set { dac_override dac_read_search };
+diff --git a/public/domain.te b/public/domain.te
+index 6618c4bc..38d6f6ee 100644
+--- a/public/domain.te
++++ b/public/domain.te
+@@ -262,17 +262,15 @@ allow domain fs_type:dir getattr;
+ # defaults for all processes. Note that granting this whitelist to domain does
+ # not grant the ioctl permission on these socket types. That must be granted
+ # separately.
+-allowxperm domain domain:{ icmp_socket rawip_socket tcp_socket udp_socket }
+-  ioctl { unpriv_sock_ioctls unpriv_tty_ioctls };
++# [v26-strip] allowxperm domain domain:{ icmp_socket rawip_socket tcp_socket udp_socket }
+ # default whitelist for unix sockets.
+-allowxperm domain domain:{ unix_dgram_socket unix_stream_socket }
+-  ioctl unpriv_unix_sock_ioctls;
++# [v26-strip] allowxperm domain domain:{ unix_dgram_socket unix_stream_socket }
+ 
+ # Restrict PTYs to only whitelisted ioctls.
+ # Note that granting this whitelist to domain does
+ # not grant the wider ioctl permission. That must be granted
+ # separately.
+-allowxperm domain devpts:chr_file ioctl unpriv_tty_ioctls;
++# [v26-strip] # [v26-strip] allowxperm domain devpts:chr_file ioctl unpriv_tty_ioctls;
+ 
+ # Workaround for policy compiler being too aggressive and removing hwservice_manager_type
+ # when it's not explicitly used in allow rules
+@@ -289,16 +287,16 @@ with_asan(`allow domain system_data_file:dir getattr;')
+ ###
+ 
+ # All socket ioctls must be restricted to a whitelist.
+-neverallowxperm domain domain:socket_class_set ioctl { 0 };
++# [v26-strip] neverallowxperm domain domain:socket_class_set ioctl { 0 };
+ 
+ # b/68014825 and https://android-review.googlesource.com/516535
+ # rfc6093 says that processes should not use the TCP urgent mechanism
+-neverallowxperm domain domain:socket_class_set ioctl { SIOCATMARK };
++# [v26-strip] neverallowxperm domain domain:socket_class_set ioctl { SIOCATMARK };
+ 
+ # TIOCSTI is only ever used for exploits. Block it.
+ # b/33073072, b/7530569
+ # http://www.openwall.com/lists/oss-security/2016/09/26/14
+-neverallowxperm * devpts:chr_file ioctl TIOCSTI;
++# [v26-strip] neverallowxperm * devpts:chr_file ioctl TIOCSTI;
+ 
+ # Do not allow any domain other than init to create unlabeled files.
+ neverallow { domain -init -recovery } unlabeled:dir_file_class_set create;
+diff --git a/public/hal_cas.te b/public/hal_cas.te
+index 7f653585..6afbe0f2 100644
+--- a/public/hal_cas.te
++++ b/public/hal_cas.te
+@@ -32,4 +32,4 @@ allow hal_cas tee_device:chr_file rw_file_perms;
+ neverallow hal_cas_server { file_type fs_type }:file execute_no_trans;
+ 
+ # do not allow privileged socket ioctl commands
+-neverallowxperm hal_cas_server domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
++# [v26-strip] neverallowxperm hal_cas_server domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
+diff --git a/public/hal_drm.te b/public/hal_drm.te
+index a46dd911..11395722 100644
+--- a/public/hal_drm.te
++++ b/public/hal_drm.te
+@@ -38,8 +38,7 @@ allow hal_drm sysfs:file r_file_perms;
+ allow hal_drm tee_device:chr_file rw_file_perms;
+ 
+ # only allow unprivileged socket ioctl commands
+-allowxperm hal_drm self:{ rawip_socket tcp_socket udp_socket }
+-  ioctl { unpriv_sock_ioctls unpriv_tty_ioctls };
++# [v26-strip] allowxperm hal_drm self:{ rawip_socket tcp_socket udp_socket }
+ 
+ ###
+ ### neverallow rules
+@@ -50,4 +49,4 @@ allowxperm hal_drm self:{ rawip_socket tcp_socket udp_socket }
+ neverallow hal_drm_server { file_type fs_type }:file execute_no_trans;
+ 
+ # do not allow privileged socket ioctl commands
+-neverallowxperm hal_drm_server domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
++# [v26-strip] neverallowxperm hal_drm_server domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
+diff --git a/public/hal_telephony.te b/public/hal_telephony.te
+index 5f8cc41c..44bffb1d 100644
+--- a/public/hal_telephony.te
++++ b/public/hal_telephony.te
+@@ -5,7 +5,7 @@ binder_call(hal_telephony_server, hal_telephony_client)
+ add_hwservice(hal_telephony_server, hal_telephony_hwservice)
+ allow hal_telephony_client hal_telephony_hwservice:hwservice_manager find;
+ 
+-allowxperm hal_telephony_server self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm hal_telephony_server self:udp_socket ioctl priv_sock_ioctls;
+ 
+ allow hal_telephony_server self:netlink_route_socket nlmsg_write;
+ allow hal_telephony_server kernel:system module_request;
+diff --git a/public/hal_wifi.te b/public/hal_wifi.te
+index 7cea7c74..b3ca2d5a 100644
+--- a/public/hal_wifi.te
++++ b/public/hal_wifi.te
+@@ -13,7 +13,7 @@ set_prop(hal_wifi, wifi_prop)
+ 
+ # allow hal wifi set interfaces up and down
+ allow hal_wifi self:udp_socket create_socket_perms;
+-allowxperm hal_wifi self:udp_socket ioctl { SIOCSIFFLAGS SIOCSIFHWADDR };
++# [v26-strip] # [v26-strip] allowxperm hal_wifi self:udp_socket ioctl { SIOCSIFFLAGS SIOCSIFHWADDR };
+ 
+ allow hal_wifi self:global_capability_class_set { net_admin net_raw };
+ # allow hal_wifi to speak to nl80211 in the kernel
+diff --git a/public/hal_wifi_hostapd.te b/public/hal_wifi_hostapd.te
+index 03a55467..61545238 100644
+--- a/public/hal_wifi_hostapd.te
++++ b/public/hal_wifi_hostapd.te
+@@ -13,7 +13,7 @@ allow hal_wifi_hostapd_server sysfs_net:dir search;
+ allow hal_wifi_hostapd_server proc_net:file { getattr open read };
+ 
+ # Various socket permissions.
+-allowxperm hal_wifi_hostapd_server self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm hal_wifi_hostapd_server self:udp_socket ioctl priv_sock_ioctls;
+ allow hal_wifi_hostapd_server self:netlink_socket create_socket_perms_no_ioctl;
+ allow hal_wifi_hostapd_server self:netlink_generic_socket create_socket_perms_no_ioctl;
+ allow hal_wifi_hostapd_server self:packet_socket create_socket_perms_no_ioctl;
+diff --git a/public/hal_wifi_supplicant.te b/public/hal_wifi_supplicant.te
+index 6bf0d326..5b5abde8 100644
+--- a/public/hal_wifi_supplicant.te
++++ b/public/hal_wifi_supplicant.te
+@@ -6,7 +6,7 @@ add_hwservice(hal_wifi_supplicant_server, hal_wifi_supplicant_hwservice)
+ allow hal_wifi_supplicant_client hal_wifi_supplicant_hwservice:hwservice_manager find;
+ 
+ # in addition to ioctls whitelisted for all domains, grant hal_wifi_supplicant priv_sock_ioctls.
+-allowxperm hal_wifi_supplicant self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm hal_wifi_supplicant self:udp_socket ioctl priv_sock_ioctls;
+ 
+ r_dir_file(hal_wifi_supplicant, sysfs_type)
+ r_dir_file(hal_wifi_supplicant, proc_net)
+@@ -18,7 +18,7 @@ allow hal_wifi_supplicant self:netlink_route_socket nlmsg_write;
+ allow hal_wifi_supplicant self:netlink_socket create_socket_perms_no_ioctl;
+ allow hal_wifi_supplicant self:netlink_generic_socket create_socket_perms_no_ioctl;
+ allow hal_wifi_supplicant self:packet_socket create_socket_perms;
+-allowxperm hal_wifi_supplicant self:packet_socket ioctl { unpriv_sock_ioctls priv_sock_ioctls unpriv_tty_ioctls };
++# [v26-strip] # [v26-strip] allowxperm hal_wifi_supplicant self:packet_socket ioctl { unpriv_sock_ioctls priv_sock_ioctls unpriv_tty_ioctls };
+ 
+ ###
+ ### neverallow rules
+diff --git a/public/init.te b/public/init.te
+index 05a61aec..91f53760 100644
+--- a/public/init.te
++++ b/public/init.te
+@@ -437,7 +437,7 @@ allow init self:global_capability_class_set audit_write;
+ # Run "ifup lo" to bring up the localhost interface
+ allow init self:udp_socket { create ioctl };
+ # in addition to unpriv ioctls granted to all domains, init also needs:
+-allowxperm init self:udp_socket ioctl SIOCSIFFLAGS;
++# [v26-strip] # [v26-strip] allowxperm init self:udp_socket ioctl SIOCSIFFLAGS;
+ allow init self:global_capability_class_set net_raw;
+ 
+ # This line seems suspect, as it should not really need to
+diff --git a/public/mediadrmserver.te b/public/mediadrmserver.te
+index 123cb29a..b29f5e82 100644
+--- a/public/mediadrmserver.te
++++ b/public/mediadrmserver.te
+@@ -28,4 +28,4 @@ binder_call(mediadrmserver, mediacodec)
+ neverallow mediadrmserver { file_type fs_type }:file execute_no_trans;
+ 
+ # do not allow privileged socket ioctl commands
+-neverallowxperm mediadrmserver domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
++# [v26-strip] neverallowxperm mediadrmserver domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
+diff --git a/public/mediaserver.te b/public/mediaserver.te
+index ae9718f1..429b2c96 100644
+--- a/public/mediaserver.te
++++ b/public/mediaserver.te
+@@ -124,8 +124,7 @@ allow mediaserver drmserver:drmservice {
+ };
+ 
+ # only allow unprivileged socket ioctl commands
+-allowxperm mediaserver self:{ rawip_socket tcp_socket udp_socket }
+-  ioctl { unpriv_sock_ioctls unpriv_tty_ioctls };
++# [v26-strip] allowxperm mediaserver self:{ rawip_socket tcp_socket udp_socket }
+ 
+ # Access to /data/media.
+ # This should be removed if sdcardfs is modified to alter the secontext for its
+@@ -161,4 +160,4 @@ binder_call(mediaserver, mediacodec)
+ neverallow mediaserver { file_type fs_type }:file execute_no_trans;
+ 
+ # do not allow privileged socket ioctl commands
+-neverallowxperm mediaserver domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
++# [v26-strip] neverallowxperm mediaserver domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
+diff --git a/public/netd.te b/public/netd.te
+index a550b258..f1667091 100644
+--- a/public/netd.te
++++ b/public/netd.te
+@@ -4,7 +4,7 @@ type netd_exec, exec_type, file_type;
+ 
+ net_domain(netd)
+ # in addition to ioctls whitelisted for all domains, grant netd priv_sock_ioctls.
+-allowxperm netd self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm netd self:udp_socket ioctl priv_sock_ioctls;
+ 
+ r_dir_file(netd, cgroup)
+ 
+diff --git a/public/pisces.te b/public/pisces.te
+new file mode 100644
+index 00000000..0034fa99
+--- /dev/null
++++ b/public/pisces.te
+@@ -0,0 +1,15 @@
++# Types shared between the platform and vendor policy for this device.
++#
++# system/sepolicy/private/ and system/sepolicy/vendor/ are compiled as
++# separate policy modules: a type declared in private/ is invisible to the
++# vendor *.te files, so anything both sides have to name lives here.
++
++# /sys/class/rfkill: the BCM43341 power switch.  It needs its own type because
++# init may not write the generic sysfs type (neverallow init sysfs:file write)
++# and the Bluetooth HAL (a vendor domain) has to drive the same nodes.
++type sysfs_rfkill, fs_type, sysfs_type;
++
++# ALSA control node (/dev/snd/controlC0).  Kept separate from the generic
++# audio_device type so that the audio HAL keeps its access while adb shell can
++# be granted the node for tinymix/tinyplay during bring-up debugging.
++type audio_control_device, dev_type;
+diff --git a/public/ppp.te b/public/ppp.te
+index 9340dee8..f4bc358e 100644
+--- a/public/ppp.te
++++ b/public/ppp.te
+@@ -10,8 +10,8 @@ r_dir_file(ppp, proc_net)
+ allow ppp mtp:socket rw_socket_perms;
+ 
+ # ioctls needed for VPN.
+-allowxperm ppp self:udp_socket ioctl priv_sock_ioctls;
+-allowxperm ppp mtp:socket ioctl ppp_ioctls;
++# [v26-strip] # [v26-strip] allowxperm ppp self:udp_socket ioctl priv_sock_ioctls;
++# [v26-strip] # [v26-strip] allowxperm ppp mtp:socket ioctl ppp_ioctls;
+ 
+ allow ppp mtp:unix_dgram_socket rw_socket_perms;
+ allow ppp ppp_device:chr_file rw_file_perms;
+diff --git a/public/racoon.te b/public/racoon.te
+index c759217a..d998c1d6 100644
+--- a/public/racoon.te
++++ b/public/racoon.te
+@@ -5,7 +5,7 @@ type racoon_exec, exec_type, file_type;
+ typeattribute racoon mlstrustedsubject;
+ 
+ net_domain(racoon)
+-allowxperm racoon self:udp_socket ioctl { SIOCSIFFLAGS SIOCSIFADDR SIOCSIFNETMASK };
++# [v26-strip] # [v26-strip] allowxperm racoon self:udp_socket ioctl { SIOCSIFFLAGS SIOCSIFADDR SIOCSIFNETMASK };
+ 
+ binder_use(racoon)
+ 
+diff --git a/public/shell.te b/public/shell.te
+index 43ec6191..121286fd 100644
+--- a/public/shell.te
++++ b/public/shell.te
+@@ -212,7 +212,7 @@ allow shell vendor_shell_exec:file rx_file_perms;
+ neverallow shell file_type:file link;
+ 
+ # Do not allow privileged socket ioctl commands
+-neverallowxperm shell domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
++# [v26-strip] neverallowxperm shell domain:{ rawip_socket tcp_socket udp_socket } ioctl priv_sock_ioctls;
+ 
+ # limit shell access to sensitive char drivers to
+ # only getattr required for host side test.
+diff --git a/public/te_macros b/public/te_macros
+index dcebbefa..309edffc 100644
+--- a/public/te_macros
++++ b/public/te_macros
+@@ -424,11 +424,11 @@ type $1_devpts, fs_type;
+ type_transition $1 devpts:chr_file $1_devpts;
+ # Allow use of the pty after creation.
+ allow $1 $1_devpts:chr_file { open getattr read write ioctl };
+-allowxperm $1 $1_devpts:chr_file ioctl unpriv_tty_ioctls;
++# [v26-strip] allowxperm $1 $1_devpts:chr_file ioctl unpriv_tty_ioctls;
+ # TIOCSTI is only ever used for exploits. Block it.
+ # b/33073072, b/7530569
+ # http://www.openwall.com/lists/oss-security/2016/09/26/14
+-neverallowxperm * $1_devpts:chr_file ioctl TIOCSTI;
++# [v26-strip] neverallowxperm * $1_devpts:chr_file ioctl TIOCSTI;
+ # Note: devpts:dir search and ptmx_device:chr_file rw_file_perms
+ # allowed to everyone via domain.te.
+ ')
+diff --git a/public/wificond.te b/public/wificond.te
+index 9e4dc7d3..bd5138fd 100644
+--- a/public/wificond.te
++++ b/public/wificond.te
+@@ -14,7 +14,7 @@ set_prop(wificond, ctl_default_prop)
+ # create sockets to set interfaces up and down
+ allow wificond self:udp_socket create_socket_perms;
+ # setting interface state up/down is a privileged ioctl
+-allowxperm wificond self:udp_socket ioctl { SIOCSIFFLAGS SIOCSIFHWADDR };
++# [v26-strip] # [v26-strip] allowxperm wificond self:udp_socket ioctl { SIOCSIFFLAGS SIOCSIFHWADDR };
+ allow wificond self:global_capability_class_set { net_admin net_raw };
+ # allow wificond to speak to nl80211 in the kernel
+ allow wificond self:netlink_socket create_socket_perms_no_ioctl;
+diff --git a/public/wpantund.te b/public/wpantund.te
+index b3172365..acb81339 100644
+--- a/public/wpantund.te
++++ b/public/wpantund.te
+@@ -21,7 +21,7 @@ allow wpantund {priv_app shell}:binder call;
+ allow wpantund self:udp_socket create_socket_perms;
+ 
+ # setting interface state up/down and changing MTU are privileged ioctls
+-allowxperm wpantund self:udp_socket ioctl { SIOCSIFFLAGS SIOCSIFMTU };
++# [v26-strip] # [v26-strip] allowxperm wpantund self:udp_socket ioctl { SIOCSIFFLAGS SIOCSIFMTU };
+ 
+ # Allow us to bring up a TUN network interface.
+ allow wpantund tun_device:chr_file rw_file_perms;
+diff --git a/vendor/file_contexts b/vendor/file_contexts
+index 22f0dbb4..06fd6c21 100644
+--- a/vendor/file_contexts
++++ b/vendor/file_contexts
+@@ -45,6 +45,7 @@
+ /(vendor|system/vendor)/bin/hw/android\.hardware\.tv\.cec@1\.0-service        u:object_r:hal_tv_cec_default_exec:s0
+ /(vendor|system/vendor)/bin/hw/android\.hardware\.tv\.input@1\.0-service      u:object_r:hal_tv_input_default_exec:s0
+ /(vendor|system/vendor)/bin/hw/android\.hardware\.usb@1\.0-service            u:object_r:hal_usb_default_exec:s0
++/(vendor|system/vendor)/bin/hw/android\.hardware\.usb\.gadget@1\.0-service\.pisces	u:object_r:hal_usb_gadget_default_exec:s0
+ /(vendor|system/vendor)/bin/hw/android\.hardware\.vibrator@1\.0-service       u:object_r:hal_vibrator_default_exec:s0
+ /(vendor|system/vendor)/bin/hw/android\.hardware\.vr@1\.0-service             u:object_r:hal_vr_default_exec:s0
+ /(vendor|system/vendor)/bin/hw/android\.hardware\.wifi\.offload@1\.0-service  u:object_r:hal_wifi_offload_default_exec:s0
+diff --git a/vendor/hal_audio_default.te b/vendor/hal_audio_default.te
+index 0dc21703..6c6a19d3 100644
+--- a/vendor/hal_audio_default.te
++++ b/vendor/hal_audio_default.te
+@@ -6,3 +6,13 @@ init_daemon_domain(hal_audio_default)
+ 
+ hal_client_domain(hal_audio_default, hal_allocator)
+ 
++
++# pisces: /dev/snd/controlC0 has its own type (see public/pisces.te); the HAL's
++# mixer must keep opening it.
++allow hal_audio_default audio_control_device:chr_file rw_file_perms;
++allow hal_audio_default audio_control_device:dir r_dir_perms;
++
++# pisces: AudioFlinger runs inside audioserver, but keep the same access on the
++# vendor side in case the legacy HAL is moved to its own process.
++allow hal_audio_default sysfs_wake_lock:dir r_dir_perms;
++allow hal_audio_default sysfs_wake_lock:file rw_file_perms;
+diff --git a/vendor/hal_bluetooth_default.te b/vendor/hal_bluetooth_default.te
+index 01d60dbb..0a4adab5 100644
+--- a/vendor/hal_bluetooth_default.te
++++ b/vendor/hal_bluetooth_default.te
+@@ -3,3 +3,25 @@ hal_server_domain(hal_bluetooth_default, hal_bluetooth)
+ 
+ type hal_bluetooth_default_exec, exec_type, vendor_file_type, file_type;
+ init_daemon_domain(hal_bluetooth_default)
++
++# pisces: the BCM43341 needs its MAC address from /data and talks over the
++# legacy UART node /dev/ttyHS2 (both denied by the stock policy).
++allow hal_bluetooth_default bluetooth_data_file:file r_file_perms;
++allow hal_bluetooth_default bluetooth_data_file:dir r_dir_perms;
++allow hal_bluetooth_default serial_device:chr_file rw_file_perms;
++
++# bt_upio powers the BCM43341 through /sys/class/rfkill/rfkill0/state and reads
++# .../type back.  Without this every HCI firmware download times out:
++#   bt_upio: init_rfkill : open(/sys/class/rfkill/rfkill0/type) failed: EACCES
++#   bt_core_module: module_start_up Failed to start up module "hci_module"
++allow hal_bluetooth_default sysfs_rfkill:file rw_file_perms;
++allow hal_bluetooth_default sysfs_rfkill:dir r_dir_perms;
++
++# The HCI thread asks for SCHED_FIFO; without sys_nice it falls back to
++# SCHED_OTHER ("ThreadRoutine unable to set SCHED_FIFO ... Operation not
++# permitted") on a 921600 baud UART.
++allow hal_bluetooth_default self:global_capability_class_set sys_nice;
++
++
++allow hal_bluetooth_default sysfs:dir r_dir_perms;
++allow hal_bluetooth_default sysfs:file rw_file_perms;
+diff --git a/vendor/hal_camera_default.te b/vendor/hal_camera_default.te
+index 5bc4a619..54f93923 100644
+--- a/vendor/hal_camera_default.te
++++ b/vendor/hal_camera_default.te
+@@ -9,3 +9,63 @@ allow hal_camera_default fwk_sensor_hwservice:hwservice_manager find;
+ # For collecting bugreports.
+ allow hal_camera_default dumpstate:fd use;
+ allow hal_camera_default dumpstate:fifo_file write;
++
++# pisces: the NVIDIA camera blobs ship libFaceProc.so (and friends) with text
++# relocations, so the linker needs PROT_EXEC on a private writable mapping.
++# Without it every open of camera 0 fails:
++#   avc: denied { execmod } for path="/system/lib/libFaceProc.so"
++#   CameraWrapper: failed to dlopen vendor camera module:
++#       dlopen failed: can't protect segments for "...libFaceProc.so":
++#       Permission denied
++#   CameraProviderManager: openSession: giving up on camera 0 after 14 attempts
++#   CameraService: Failed to initialize camera "0": Broken pipe (-32)
++# This also takes the torch (status bar flashlight tile) down with it.
++# TARGET_NEEDS_PLATFORM_TEXT_RELOCATIONS := true in BoardConfig.mk is what
++# makes this rule legal (see the execmod neverallow in public/domain.te).
++allow hal_camera_default system_file:file execmod;
++allow hal_camera_default vendor_file:file execmod;
++
++# The status bar flashlight tile goes through CameraService.setTorchMode().
++# The wrapper module is CAMERA_MODULE_API_VERSION_1_0, so the provider falls
++# back to opening the camera and setting "flash-mode=torch"; the wrapper then
++# drives the LED through /sys/class/leds/flashlight/brightness (see
++# set_flash_led() in hardware/nvidia/pisces/camera/CameraWrapper.cpp).  The
++# /sys/class/leds subtree is labeled sysfs_leds, and without the write the
++# tile click silently does nothing:
++#   set_flash_led: cannot open the flashlight node
++allow hal_camera_default sysfs_leds:file rw_file_perms;
++allow hal_camera_default sysfs_leds:lnk_file read;
++allow hal_camera_default sysfs_leds:dir r_dir_perms;
++allow hal_camera_default sysfs:dir r_dir_perms;
++
++# The 2013 NVIDIA HAL talks to the host1x/NvRM device nodes directly (it does
++# not go through gralloc): /dev/nvhost-ctrl, /dev/nvhost-vi, /dev/nvhost-isp,
++# /dev/nvmap ... are all labeled gpu_device on this port.  Without the access
++# nvrm_init() fails before the sensor is even touched:
++#   NvOsDebugPrintf: ****nvrm_init failed****
++#   NvOsDebugPrintf: Error: Can't open /dev/nvhost-ctrl
++#   NvCameraHal: setupHalInLock:539 failed to open camera! Error: 0x3
++# (the gpu_device neverallow only restricts halserverdomain other than
++# hal_camera_server, and hal_camera_default is hal_camera_server)
++allow hal_camera_default gpu_device:chr_file rw_file_perms;
++allow hal_camera_default gpu_device:dir r_dir_perms;
++
++# NvRM/NvCamera read /sys/devices/platform/host1x/... and the devfreq knobs
++# while initialising.
++allow hal_camera_default sysfs:file r_file_perms;
++
++# The camera wrapper caches the per-sensor shim parameters in
++# /data/misc/pisces_camera (labeled camera_data_file).
++allow hal_camera_default camera_data_file:dir rw_dir_perms;
++allow hal_camera_default camera_data_file:file create_file_perms;
++# NOTE: the NvMM cache in /data/misc/pisces_camera is still labeled
++# system_data_file (init's restorecon is broken on this port, see the
++# restorecon failures in dmesg) and domain.te forbids granting write on
++# system_data_file to a vendor HAL, so that cache is simply not usable yet.
++# It is a performance cache only; the camera works without it.
++
++# camera_device_close() forks a child that SIGKILLs the provider (the 2013
++# vendor HAL cannot be closed twice), so the domain must be able to signal
++# itself.
++allow hal_camera_default self:process signal;
++
+diff --git a/vendor/hal_graphics_allocator_default.te b/vendor/hal_graphics_allocator_default.te
+index 3d97ed04..898280a3 100644
+--- a/vendor/hal_graphics_allocator_default.te
++++ b/vendor/hal_graphics_allocator_default.te
+@@ -6,3 +6,7 @@ init_daemon_domain(hal_graphics_allocator_default)
+ 
+ # b/70180742
+ dontaudit hal_graphics_allocator_default unlabeled:dir search;
++
++# pisces: the Tegra 4 gralloc maps nvmap directly
++allow hal_graphics_allocator_default gpu_device:chr_file rw_file_perms;
++allow hal_graphics_allocator_default sysfs:file r_file_perms;
+diff --git a/vendor/hal_graphics_composer_default.te b/vendor/hal_graphics_composer_default.te
+index 72d781db..d084c1c0 100644
+--- a/vendor/hal_graphics_composer_default.te
++++ b/vendor/hal_graphics_composer_default.te
+@@ -6,3 +6,11 @@ init_daemon_domain(hal_graphics_composer_default)
+ 
+ # b/68864350
+ dontaudit hal_graphics_composer_default unlabeled:dir search;
++
++# pisces: the Tegra 4 HWC talks to the display through /dev/vndbinder
++vndbinder_use(hal_graphics_composer_default)
++
++# pisces: Tegra 4 HWC maps nvmap and the display controller directly
++allow hal_graphics_composer_default gpu_device:chr_file rw_file_perms;
++allow hal_graphics_composer_default video_device:chr_file rw_file_perms;
++allow hal_graphics_composer_default sysfs:file r_file_perms;
+diff --git a/vendor/hal_light_default.te b/vendor/hal_light_default.te
+index c7fa9a1f..41ed58db 100644
+--- a/vendor/hal_light_default.te
++++ b/vendor/hal_light_default.te
+@@ -3,3 +3,11 @@ hal_server_domain(hal_light_default, hal_light)
+ 
+ type hal_light_default_exec, exec_type, vendor_file_type, file_type;
+ init_daemon_domain(hal_light_default)
++
++# pisces: the lights HAL drives the notification/charging LED through
++# /sys/class/leds.  hal_light already allows sysfs_leds; the generic sysfs
++# grant covers the nodes that do not get the per-node label.
++allow hal_light_default sysfs_leds:file rw_file_perms;
++allow hal_light_default sysfs_leds:lnk_file read;
++allow hal_light_default sysfs_leds:dir r_dir_perms;
++allow hal_light_default sysfs:file rw_file_perms;
+diff --git a/vendor/hal_usb_gadget_default.te b/vendor/hal_usb_gadget_default.te
+new file mode 100644
+index 00000000..441ab069
+--- /dev/null
++++ b/vendor/hal_usb_gadget_default.te
+@@ -0,0 +1,25 @@
++# pisces: the USB gadget HAL ships as a vendor binary named
++# android.hardware.usb.gadget@1.0-service.pisces.  AOSP's vendor policy has the
++# hal_usb_gadget attributes but no default domain, so the binary stayed
++# vendor_file and init refused to exec it ("execute_no_trans"), which left
++# system_server waiting forever for IUsbGadget/default and the boot stuck on
++# the boot animation.
++type hal_usb_gadget_default, domain;
++hal_server_domain(hal_usb_gadget_default, hal_usb_gadget)
++
++type hal_usb_gadget_default_exec, exec_type, vendor_file_type, file_type;
++init_daemon_domain(hal_usb_gadget_default)
++
++# This board exposes the legacy /sys/class/android_usb gadget rather than
++# configfs, and the .pisces HAL drives that interface directly.
++allow hal_usb_gadget_default sysfs_android_usb:file rw_file_perms;
++allow hal_usb_gadget_default sysfs_android_usb:dir r_dir_perms;
++allow hal_usb_gadget_default sysfs_android_usb:lnk_file r_file_perms;
++allow hal_usb_gadget_default sysfs:file rw_file_perms;
++allow hal_usb_gadget_default sysfs:dir r_dir_perms;
++
++# It also needs to poke adbd and the USB state properties.
++allow hal_usb_gadget_default adbd:unix_stream_socket connectto;
++allow hal_usb_gadget_default adbd_socket:sock_file write;
++allow hal_usb_gadget_default system_radio_prop:property_service set;
++allow hal_usb_gadget_default ffs_prop:property_service set;
+diff --git a/vendor/hal_wifi_default.te b/vendor/hal_wifi_default.te
+index 75a98429..1469725c 100644
+--- a/vendor/hal_wifi_default.te
++++ b/vendor/hal_wifi_default.te
+@@ -3,3 +3,9 @@ hal_server_domain(hal_wifi_default, hal_wifi)
+ 
+ type hal_wifi_default_exec, exec_type, vendor_file_type, file_type;
+ init_daemon_domain(hal_wifi_default)
++
++# pisces: the Broadcom WiFi HAL writes the firmware/nvram paths into the
++# bcmdhd sysfs attributes during interface creation.  With SELinux enforcing
++# from the very first seconds this write is what makes "WiFi won't turn on".
++allow hal_wifi_default sysfs:dir r_dir_perms;
++allow hal_wifi_default sysfs:file rw_file_perms;
+diff --git a/vendor/pisces_rild.te b/vendor/pisces_rild.te
+new file mode 100644
+index 00000000..60f499a1
+--- /dev/null
++++ b/vendor/pisces_rild.te
+@@ -0,0 +1,5 @@
++# pisces: the Spreadtrum modem exposes its multiplexer as /dev/ts0710mux*;
++# rild talks to the modem through them.  They used to keep the default
++# "device" label, so rild was denied and the baseband never came up.
++allow rild radio_device:dir r_dir_perms;
++allow rild radio_device:chr_file rw_file_perms;

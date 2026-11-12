@@ -13,17 +13,34 @@ on init
 
     chown system radio /sys/class/spi_master/spi0/spi0.0/reset
     chown root radio /sys/class/spi_master/spi0/spi0.0/assert
+    # fild powers the modem on by running
+    #   sh -c "echo 1 > /sys/.../spi0.0/pwr_onoff"
+    # and reads .../state back.  The driver exports pwr_onoff as root:root
+    # 0640 and state as root:root 0640, so fild (user radio) has to be given
+    # group access, otherwise every attempt fails with EACCES and fild loops
+    # on "Modem power is off, try to turn it on." forever.
+    chown root radio /sys/class/spi_master/spi0/spi0.0/pwr_onoff
+    chmod 0660 /sys/class/spi_master/spi0/spi0.0/pwr_onoff
+    chown root radio /sys/class/spi_master/spi0/spi0.0/state
+    chown root radio /sys/class/spi_master/spi0/spi0.0/usb_switch
+    chmod 0660 /sys/class/spi_master/spi0/spi0.0/usb_switch
 
 # fild loads fdl1.bin/modem_zip.bin into the modem over SPI and keeps the
 # modem alive; without it RIL_Init cannot open a channel and rild gives up.
 service fil-daemon /system/bin/fild
     class core
-    user root
-    group root radio
+    # Keep the daemon on user radio: running it as root would need
+    # CAP_DAC_OVERRIDE for the radio-owned /dev/ts0710mux* nodes, which the
+    # AOSP policy neverallows.  The nodes it touches are chowned above.
+    user radio
+    group radio system
     disabled
 
 on boot
-    write /sys/class/spi_master/spi0/spi0.0/reset 1
+    # The stock rc does not touch reset here; fild powers the modem with
+    # pwr_onoff and the driver manages the reset line.  init may not write
+    # generic sysfs at all (neverallow init sysfs:file write), so the old
+    # "write .../reset 1" never did anything and only added audit noise.
     start fil-daemon
 
 on property:ro.radio.noril=1
