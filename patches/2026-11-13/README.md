@@ -82,3 +82,36 @@ mode): the home screen shows "Magisk 31.1 (31100) installed", a
 in-app "direct install" / "reinstall" flow completes.  TWRP alone only
 patches the ramdisk; the first in-app reinstall is still what finishes the
 environment setup, so document that step for users.
+
+## Regressions a clean OTA build exposed (and their fixes)
+
+The hand-patched system image had accumulated fixes that were not in the
+tree; the first full OTA build made them visible.  All are fixed now:
+
+1. **fdl could not read the modem partitions.**
+   `fdl` opens `/dev/block/platform/.../by-name/{MDM,MLO,MRO,MRW}`, which
+   resolve to `mmcblk0p10/p11/p12/p16`.  AOSP neverallows raw
+   `block_device:blk_file` access.  ueventd now labels those four nodes
+   `u:object_r:modem_block_device:s0` and `fild` gets
+   `allow fild modem_block_device:blk_file rw_file_perms;`
+   plus `toolbox_exec` exec (its shell helpers) and
+   `block_device:dir/lnk_file` read for the by-name path.
+2. **Duplicate platform/media signer in mac_permissions.xml.**
+   This port unifies all signing keys, so `@PLATFORM` and `@MEDIA` resolve
+   to the same certificate.  Two signer stanzas for one cert made PMS use
+   `media` instead of `platform`; every platform app became
+   `default:privapp...`, `selinux_android_setcontext()` for
+   `com.android.phone` failed (`seapp_context_lookup: No match ... seinfo
+   default`) and the phone process stayed in the zygote domain, leaving
+   `gsm.version.baseband` empty.  The `@MEDIA` stanza is removed; the
+   single platform signer covers media too.  The Magisk signer stays a
+   separate stanza.
+3. **zygote ashmem fd use.**  Some early processes remain in the zygote
+   domain (setcon workaround) and receive `MemoryIntArray` ashmem fds from
+   system_server.  Without `allow zygote system_server:fd use;` every
+   Bundle carrying one fails with "Error unparceling MemoryIntArray"
+   (telephony provider / CryptKeeper crash).
+
+After these, a clean data + clean OTA build boots with baseband
+`DM_BASE_13A_8803G_W13.44 | 20140120092332`, `com.android.phone` in
+`u:r:radio:s0`, and enforcing.

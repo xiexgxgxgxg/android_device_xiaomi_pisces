@@ -125,3 +125,12 @@
 /sys/devices/platform/tegra11-i2c.4/i2c-4/4-0058/palmas-rtc.4/rtc/rtc* since_epoch              0660  system system
 /sys/devices/platform/tegra11-i2c.4/i2c-4/4-0058/palmas-rtc.4/rtc/rtc* time                     0660  system system
 /sys/devices/platform/tegra11-i2c.4/i2c-4/4-0058/palmas-rtc.4/rtc/rtc* wakealarm                0660  system system
+
+# Modem images live on dedicated partitions.  fdl reads/writes them through
+# /dev/block/platform/.../by-name/{MDM,MLO,MRO,MRW}; label the underlying
+# nodes with their own type instead of opening the generic block_device
+# (which AOSP neverallows).
+/dev/block/mmcblk0p10   0660  radio  system  u:object_r:modem_block_device:s0
+/dev/block/mmcblk0p11   0660  radio  system  u:object_r:modem_block_device:s0
+/dev/block/mmcblk0p12   0660  radio  system  u:object_r:modem_block_device:s0
+/dev/block/mmcblk0p16   0660  radio  system  u:object_r:modem_block_device:s0
