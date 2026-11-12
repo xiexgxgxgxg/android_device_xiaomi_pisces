@@ -245,3 +245,32 @@ adb shell getprop | grep -E 'init.svc|gsm.version'
 - [ ] 热重启一次，基带仍正常（验证 `BP_PWRON` 处理）
 - [ ] 刷 Magisk 31.1，app 显示已安装、能授予 su、app 内“直接安装”可完成
 - [ ] 四个仓库的改动已提交并推送；源码改动都在 `patches/` 里
+
+---
+
+## 十一、整包构建阶段新增的坑（2026-11-13 收尾）
+
+这一轮“干净数据 + 全量 OTA”验证又暴露了几个只在旧手工镜像里被绕过的问题，3.10 移植时同样会遇到：
+
+1. **`fdl` 读不了 modem 分区**。`neverallow` 禁止直接 open `block_device:blk_file`。
+   已用 ueventd 把 `mmcblk0p10/p11/p12/p16`（MDM/MLO/MRO/MRW）标成
+   `u:object_r:modem_block_device:s0`，并给 `fild` 放行；另外 `fild` 还需要
+   `toolbox_exec` 执行权限（它的 `system()` 会调 toybox）。
+2. **统一签名密钥导致 mac_permissions.xml 重复 signer**。`@PLATFORM` 和 `@MEDIA`
+   指向同一张证书时，PMS 会取 media 的 seinfo，所有 platform app 变成
+   `default:privapp...`；`com.android.phone` 的 `setcon` 到 `radio` 失败，
+   phone 进程留在 zygote 域，`gsm.version.baseband` 为空。**只保留一个
+   platform signer**（media 也用它），Magisk 的独立 signer 另放。
+3. **zygote 的 ashmem fd**。setcon workaround 会让部分早期进程留在 zygote 域，
+   它们通过 binder 收到 system_server 的 `MemoryIntArray` ashmem fd；缺
+   `allow zygote system_server:fd use;` 时 Bundle 反序列化失败
+   （"Error unparceling MemoryIntArray"），telephony provider / CryptKeeper 崩溃。
+4. 以上三条修完后，`mka installclean` 不够，**必须确认 APK 重签/oat 一致**；
+   换 system 包后建议 `twrp wipe data` 再首启，否则会出现 framework/oat
+   不匹配的假崩溃。
+
+最终整包验证记录（2026-11-13）：
+`lineage-16.0-20261112-UNOFFICIAL-pisces.zip`，清数据首启 →
+`gsm.version.baseband = DM_BASE_13A_8803G_W13.44 | 20140120092332`，
+`com.android.phone` 在 `u:r:radio:s0`，Enforcing；TWRP 刷 Magisk 31.1
+后在 app 内“直接安装”一次，首页显示 31.1 已安装、root 正常。
