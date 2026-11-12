@@ -46,3 +46,39 @@ init.svc.ril-daemon  = running
 init.svc.fil-daemon  = running
 tombstones mentioning rild: 0
 ```
+
+## Magisk 31.1 under enforcing
+
+Flashing the Magisk zip from TWRP patches the boot ramdisk, but the app then
+shows either "not installed" or "runtime environment needs repair".  The
+reason is MLS, not the daemon or su:
+
+* The Magisk app targets SDK 37, so seapp_contexts gives it
+  `levelFrom=all` and its process level is `s0:c84,c256,c512,c768`.
+* magiskd's control socket is `u:object_r:magisk_file:s0`.  Writing it is
+  covered by `mlsconstrain sock_file { write ... }` with `l1 eq l2`; the
+  app's categories break that equality, so the su helper is denied
+  `{ write }` on `magisk_file:sock_file` and the app cannot query the
+  daemon (root from a shell without categories still worked).
+
+Fix (all in the system image, enforcing stays on):
+
+1. `system/sepolicy/private/mac_permissions.xml` assigns the Magisk signing
+   certificate (SHA-256
+   `B4CB83B4DAD99F997DBE872F013AA16C14EEC41D167021F371F7E1330F273EE6`)
+   the dedicated seinfo `magisk`.
+2. `device/xiaomi/pisces/selinux/plat_seapp_contexts` adds, before the
+   generic app rules:
+   ```
+   user=_app seinfo=magisk name=com.topjohnwu.magisk domain=untrusted_app type=app_data_file levelFrom=none
+   ```
+   The manager therefore runs at level `s0` (no categories) and the socket
+   write satisfies `l1 eq l2`.  Only this one app changes; every other app
+   keeps its categories and the rest of the policy stays enforcing.
+
+Verified with a clean magisk.db (no policy rows, default mount namespace
+mode): the home screen shows "Magisk 31.1 (31100) installed", a
+`com.topjohnwu.magisk:root:0` process runs in `u:r:magisk:s0`, and the
+in-app "direct install" / "reinstall" flow completes.  TWRP alone only
+patches the ramdisk; the first in-app reinstall is still what finishes the
+environment setup, so document that step for users.

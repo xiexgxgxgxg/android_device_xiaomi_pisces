@@ -1162,12 +1162,26 @@ index 6b8a6f58..02962045 100644
 +# init (chmod 0660 + power toggling) are denied on the canonical path.
 +genfscon sysfs /devices/platform/bluedroid_pm/rfkill u:object_r:sysfs_rfkill:s0
 +genfscon sysfs /devices/virtual/rfkill u:object_r:sysfs_rfkill:s0
+diff --git a/private/mac_permissions.xml b/private/mac_permissions.xml
+index 1fcd2a40..aa42922f 100644
+--- a/private/mac_permissions.xml
++++ b/private/mac_permissions.xml
+@@ -56,4 +56,9 @@
+       <seinfo value="media" />
+     </signer>
+ 
++<signer signature="30820301308201e9a003020102020450514879300d06092a864886f70d01010b05003030310b3009060355040613025457310f300d060355040713065461697065693110300e060355040313074a6f686e2057753020170d3136303831343137323334345a180f32313136303732313137323334345a3030310b3009060355040613025457310f300d060355040713065461697065693110300e060355040313074a6f686e20577530820122300d06092a864886f70d01010105000382010f003082010a02820101008bb269a607b657a1cfaf2e6041d2c635d884b4da98b0073c42259c39a511761db01a48954992b2fd0f1e8953b798ee77d83b841a7ab9cff1e18fec30b2b8e0213641631ecd1c41bc1ec7443b183f397c5230ab28f130a081adb744ea1c4ed27d2b3935dfbe1427934f7a88f03a854350f9c9f02d0e3d9044ccd9b6d47dff72ccd5bd8ad62a75e992104eb8c9e5640adfa79e6cd51adff48ae89f76502886c15c423c541b086634530b337ce2cae2dfadb56bb4084dc51159853735da0cba9a49c02138c6e837ab77d1e20fb9581fedc3c3a30675ca2e4aea656ddc3946b58e1a194989a09c90efcfaef482cef83c8184711a8e0392a29dd98a5a53da4f54f7fb0203010001a321301f301d0603551d0e0416041429cbb552594987337a6c6ca5a49b17d741987ebf300d06092a864886f70d01010b0500038201010051717544c32c96114e10901e6b43068cbcf3b97bc6e70aac312c121fd262c6debe2fbf9c6f4588aa983a2ac8112fe4a1aa8f15d05e9aa4fdd547a0293f0112e3d3b1084ea8a070f63a48807c49589972f591217c832c0f5eaac0b044702bc7d534484e4a95acb647946e24fb8c226a6c828f795471ba3c0d7172268c5fc26bf0246cec923b2872d5a39b6ba5835e585956b1037b1b547f576a68bb04d779c07a1b66c630cc61c4a964c3382f8c8d5c4bf19b672f91c05a928f673a3d7b059ffd05a76ae3a725bab5e76f5c0e13058683670cac40dfef6f47699ff258ff60745dec65948f6a28fbdcd9e8c9ef1688e267d7af8cba17863a864f70bd11eeb62948">
++  <package name="com.topjohnwu.magisk">
++    <seinfo value="magisk"/>
++  </package>
++</signer>
+ </policy>
 diff --git a/private/pisces.te b/private/pisces.te
 new file mode 100644
-index 00000000..8e453eed
+index 00000000..e655e7d3
 --- /dev/null
 +++ b/private/pisces.te
-@@ -0,0 +1,262 @@
+@@ -0,0 +1,278 @@
 +# pisces: workarounds caused by running a modern policy on a 3.4 kernel.
 +#
 +# On this kernel the per-node sysfs labels from genfs_contexts do not take
@@ -1430,6 +1444,22 @@ index 00000000..8e453eed
 +# again once the modem is ACTIVE ("stop ril-daemon"/"start ril-daemon").
 +set_prop(fild, ctl_start_prop)
 +set_prop(fild, ctl_stop_prop)
++
++# ---- Magisk 31.x compatibility -------------------------------------------
++# MagiskSU adds one allow statement that lists every app domain at once:
++#   allow { zygote shell platform_app platform_app_all system_app
++#           priv_app priv_app_all untrusted_app untrusted_app_all }
++#         magisk unix_stream_socket { connectto getopt };
++# Android 9 knows untrusted_app_all but not platform_app_all/priv_app_all
++# (those were introduced with the Android 11 policy split).  An unknown
++# attribute makes magiskpolicy drop the whole statement, so the Magisk app's
++# "su" cannot reach magiskd and the home screen reports "not installed" even
++# though the daemon is running.  Define the missing attributes as aliases so
++# the statement applies on this policy.
++attribute platform_app_all;
++attribute priv_app_all;
++typeattribute platform_app platform_app_all;
++typeattribute priv_app priv_app_all;
 diff --git a/private/priv_app.te b/private/priv_app.te
 index 9ff8d091..7c9f281f 100644
 --- a/private/priv_app.te
