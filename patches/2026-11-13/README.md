@@ -220,3 +220,12 @@ then returns 0x00000000/0xffffffff and the speaker is silent although DAPM,
 machine driver: `tegra_cs42l73_init` force-disables `vdd_sys_audio`, waits
 100 ms and re-enables it before any audio route exists (the cold-boot
 state).  Verified with repeated warm reboots on 138/66 systems.
+
+## Warm reboot, first playback silent (ES325 async firmware)
+
+`es325_download()` is asynchronous and returns 0 before the firmware
+callback has run.  `es325_wakeup()` therefore marked the DSP ACTIVE without
+a successful sync; the first playback after a warm reboot was silent even
+though DAPM/spkr_en/bias looked right.  `es325_wakeup()` now waits after the
+download and retries `es325_sync()`; the first play recovers without any
+manual tinymix.  Verified with repeated warm reboots.
