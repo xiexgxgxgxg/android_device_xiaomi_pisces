@@ -11,6 +11,12 @@ $(call inherit-product-if-exists, vendor/xiaomi/pisces/pisces-vendor.mk)
 DEVICE_PACKAGE_OVERLAYS += $(LOCAL_PATH)/overlay
 PRODUCT_CHARACTERISTICS := nosdcard
 
+# Pin the fingerprint.  The system and vendor build.prop files are generated
+# by different rules at different times; without this ro.build.fingerprint
+# and ro.vendor.build.fingerprint disagree and the framework shows
+# "There's an internal problem with your device. Contact your manufacturer".
+BUILD_FINGERPRINT := Xiaomi/lineage_pisces/pisces:9/PQ3A.190801.002/xie11122044:user/dev-keys
+
 PRODUCT_DEFAULT_PROPERTY_OVERRIDES += \
     persist.sys.usb.config=adb
 

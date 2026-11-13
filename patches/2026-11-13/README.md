@@ -134,3 +134,18 @@ MtpServer runs in MediaProvider's `platform_app` process on this port (the
 needed `/dev/mtp_usb`.  After the fix `dumpsys usb` reports
 `current_functions=MTP, current_functions_applied=true` and the host mounts
 `mtp://Xiaomi_MI_3_095ac70c/` with the internal storage listed.
+
+## system/vendor fingerprint mismatch
+
+A fresh OTA made the framework show "There's an internal problem with your
+device" because system and system/vendor build.prop were generated at
+different times and their fingerprints differed (`...0949` vs `...0955`).
+device_pisces.mk now pins
+
+```
+BUILD_FINGERPRINT := Xiaomi/lineage_pisces/pisces:9/PQ3A.190801.002/xie11122044:user/dev-keys
+```
+
+so both files are identical (`ro.build.fingerprint` ==
+`ro.vendor.build.fingerprint`, same incremental).  Always check both after a
+build; `/vendor` on this device is a symlink to `/system/vendor`.

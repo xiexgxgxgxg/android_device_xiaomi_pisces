@@ -304,3 +304,26 @@ MTP server 的域能打开 `/dev/mtp_usb`、MTP 的 storage 是 `/storage/emulat
 验证：设备侧 `dumpsys usb` 里 `current_functions_applied=true`、
 `kernel_function_list=mtp,ffs`；主机侧 `gio mount -li` 能看到
 `mtp://Xiaomi_MI_3_095ac70c/`，`gio list` 能列出“内部共享存储空间”。
+
+---
+
+## 十三、系统/供应商指纹必须固定（2026-11-13 追加）
+
+现象：刷完新 system 包后弹“您的设备内部出现了问题，请联系您的设备制造商”。
+
+原因：`system` 与 `system/vendor`（本机 `/vendor -> /system/vendor`）的
+`build.prop` 由不同规则在不同时间生成，`ro.build.fingerprint` 和
+`ro.vendor.build.fingerprint` 的时间后缀会不同（例如 `...0949` 对 `...0955`）。
+框架检测到不一致就弹这个框。
+
+已在 `device_pisces.mk` 固定：
+```make
+BUILD_FINGERPRINT := Xiaomi/lineage_pisces/pisces:9/PQ3A.190801.002/xie11122044:user/dev-keys
+```
+3.10 移植时同样要钉死一个指纹（或在构建后统一改两份 build.prop 再打包），
+并且每次出包后检查：
+```bash
+unzip -p ota.zip system/build.prop | grep ro.build.fingerprint
+grep ro.vendor.build.fingerprint out/target/product/pisces/system/vendor/build.prop
+```
+两者必须完全一致，`ro.build.version.incremental` 也要一致。
