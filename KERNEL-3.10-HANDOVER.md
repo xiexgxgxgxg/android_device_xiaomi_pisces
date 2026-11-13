@@ -349,3 +349,17 @@ pisces.te 已允许 platform_app/sdcardd 对 `unlabeled` 做
 getattr/read/unlink，并把 `unlabeled` 标成 `mlstrustedobject` 绕过 MLS。
 3.10 上如果 restorecon 正常、文件都有正确标签，就不会有这个问题；
 若仍沿用不可靠的 restorecon，需要带同样的兜底。
+
+### Bluetooth：OTA 覆盖升级时的权限（2026-11-13 追加）
+
+`default-permissions/pisces-bluetooth.xml` 只在首次开机/新用户时生效；如果
+Bluetooth APK 是 OTA 后加进已有 data 的，PMS 不会重新应用，PBAP 打开
+ContactsProvider2 抛 `SecurityException`，整个蓝牙进程 crash-loop，适配器
+一直打不开。
+
+修复：`pisces_bt_perm`（shell 域一次性 service，`seclabel u:r:shell:s0`）
+在 `boot_completed` 后等 `pm path com.android.bluetooth` 可用，再 `pm grant`
+7 个运行时权限。注意 init 自己 **不能** `exec /system/bin/pm`/`sh`：
+`neverallow init { file_type fs_type }:file execute_no_trans`。
+3.10 若改用不同的 seapp/权限模型，同样要保证 PBAP 在无联系人权限时不会
+把整个 Bluetooth 进程带崩（或禁用 PBAP）。

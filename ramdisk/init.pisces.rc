@@ -924,7 +924,18 @@ service pisces_cpu /system/bin/pisces_cpu
     oneshot
     disabled
 
+# Runs as the shell domain (domain_trans(init, shell_exec, shell)) because init
+# itself is neverallowed to exec a system_file without a transition.
+service pisces_bt_perm /system/bin/sh /system/bin/pisces_bt_perm.sh
+    class main
+    user shell
+    group shell
+    seclabel u:r:shell:s0
+    oneshot
+    disabled
+
 on property:sys.boot_completed=1
+    start pisces_bt_perm
     # pisces: four cores are kept online by pisces_cpu.sh; re-assert the
     # battery-safe frequency cap for the case where a core was re-onlined
     # later (a new cpufreq policy starts at 1.8 GHz, which resets the phone).
@@ -937,6 +948,11 @@ on property:sys.boot_completed=1
     write /sys/devices/system/cpu/cpufreq/interactive/boost 0
     exec /system/bin/pm grant net.tonyliu.mi3setting android.permission.ACCESS_FINE_LOCATION
     exec /system/bin/pm grant net.tonyliu.mi3setting android.permission.ACCESS_LOCATION_EXTRA_COMMANDS
+
+    # pisces: the Bluetooth APK is installed by the OTA on top of existing
+    # data, so the default-permissions XML is not applied on upgrade and PBAP
+    # crash-loops on READ_CONTACTS.  Pre-grant the runtime permissions it
+    # needs; on a clean flash these are already granted and this is a no-op.
 
 on property:sys.perf.profile=high
     start nv_power_high
