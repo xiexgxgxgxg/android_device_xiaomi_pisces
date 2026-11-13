@@ -229,3 +229,13 @@ a successful sync; the first playback after a warm reboot was silent even
 though DAPM/spkr_en/bias looked right.  `es325_wakeup()` now waits after the
 download and retries `es325_sync()`; the first play recovers without any
 manual tinymix.  Verified with repeated warm reboots.
+
+## Enforcing still silences the speaker (permissive works)
+
+The 1111 package and the final 66 system are both audible under
+`androidboot.selinux=permissive`; the same 66 system under enforcing is
+silent even with stock ES325, vdd_sys_audio reset and the sync retry.  No
+audio-related `avc: denied` is logged, so the denial is hidden by dontaudit
+or a service that fails to start.  The final image therefore ships
+permissive until that rule is identified; do not claim enforcing audio is
+fixed.

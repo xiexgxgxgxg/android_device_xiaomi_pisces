@@ -951,9 +951,18 @@ service pisces_net /system/bin/sh /system/bin/pisces_net.sh
     oneshot
     disabled
 
+service pisces_audio_prime /system/bin/sh /system/bin/pisces_audio_prime.sh
+    class main
+    user shell
+    group shell audio
+    seclabel u:r:shell:s0
+    oneshot
+    disabled
+
 on property:sys.boot_completed=1
     start pisces_bt_perm
     start pisces_net
+    start pisces_audio_prime
     # pisces: four cores are kept online by pisces_cpu.sh; re-assert the
     # battery-safe frequency cap for the case where a core was re-onlined
     # later (a new cpufreq policy starts at 1.8 GHz, which resets the phone).

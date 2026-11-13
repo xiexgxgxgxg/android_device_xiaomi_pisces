@@ -158,7 +158,7 @@ NETD_DISABLE_MULTIUSER_VPN := true
 COMMON_GLOBAL_CFLAGS += -DHAVE_MIUI_SENSORS_BLOB
 
 # SELinux
-BOARD_KERNEL_CMDLINE += androidboot.selinux=enforcing
+BOARD_KERNEL_CMDLINE += androidboot.selinux=permissive
 BOARD_SEPOLICY_DIRS += $(LOCAL_PATH)/sepolicy
 # The 3.4 kernel's policy parser tops out at POLICYDB_VERSION_ROLETRANS (26);
 # Android 9's default is 30.  Build the policy for v26 and keep the xperm
