@@ -211,3 +211,12 @@ AOSP arm prebuilt **66.0.3359.158** renders correctly once the kernel
 seccomp-filter stacking fix (bc24584b) and trace_marker permission are in
 place.  Keep `external/chromium-webview/prebuilt/arm/webview.apk` at 66;
 do not switch to 138 on this device.
+
+## Speaker silent after warm reboot
+
+`vdd_sys_audio`/ES325 stay powered across a warm reboot; `es325_sync()`
+then returns 0x00000000/0xffffffff and the speaker is silent although DAPM,
+`spkr_en(gpio 108)` and bias level 3 look correct.  The fix is in the
+machine driver: `tegra_cs42l73_init` force-disables `vdd_sys_audio`, waits
+100 ms and re-enables it before any audio route exists (the cold-boot
+state).  Verified with repeated warm reboots on 138/66 systems.
