@@ -105,7 +105,8 @@ PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/default-permissions/pisces-bluetooth.xml:system/etc/default-permissions/pisces-bluetooth.xml
 
 PRODUCT_PACKAGES += \
-    dumpe2fs
+    dumpe2fs \
+    pisces_cpu
 
 # pisces: every pisces specific workaround in frameworks/av is behind this
 # property, so the same source tree still behaves like stock on other devices.
