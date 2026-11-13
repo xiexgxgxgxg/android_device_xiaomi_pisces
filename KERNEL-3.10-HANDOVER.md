@@ -339,3 +339,13 @@ kworker/root；而 `/storage/emulated/0` 是 FUSE，sdcardd 按调用者凭据�
 另外 sdcardd 需要 `fsetid`（以及旧 unlabeled 文件的读权限）。
 3.10 如果改用 FunctionFS（MtpFfsHandle）通常不会踩这个 workqueue 凭据坑，
 但若继续用 legacy `/dev/mtp_usb`，这个修复必须带上。
+
+### 电脑端删除内部存储文件（2026-11-13 追加）
+
+adb/TWRP 推进 `/sdcard` 的文件没有 SELinux xattr，保持 `unlabeled`；
+platform_app 带 MCS 分类（`s0:c512,c768`）而文件是 `s0`，`unlink` 的
+`mlsconstrain` 要求 `l1 eq l2`，所以 PC 会报 "could not delete object"。
+pisces.te 已允许 platform_app/sdcardd 对 `unlabeled` 做
+getattr/read/unlink，并把 `unlabeled` 标成 `mlstrustedobject` 绕过 MLS。
+3.10 上如果 restorecon 正常、文件都有正确标签，就不会有这个问题；
+若仍沿用不可靠的 restorecon，需要带同样的兜底。
