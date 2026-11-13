@@ -1,0 +1,24 @@
+diff --git a/adb/file_sync_service.cpp b/adb/file_sync_service.cpp
+index f7be8f94b..243628d99 100644
+--- a/adb/file_sync_service.cpp
++++ b/adb/file_sync_service.cpp
+@@ -49,7 +49,18 @@ using android::base::StringPrintf;
+ 
+ static bool should_use_fs_config(const std::string& path) {
+     // TODO: use fs_config to configure permissions on /data too.
+-    return !android::base::StartsWith(path, "/data/");
++    // fs_config describes the system/vendor partitions.  User storage is
++    // FUSE-backed and has no meaningful entry; worse, the "sdcard" row is
++    // root:root, so adbd (shell) would fchown the pushed file to root and
++    // fail with EPERM.  Leave uid/gid at -1 for these paths.
++    if (android::base::StartsWith(path, "/data/") ||
++        android::base::StartsWith(path, "/sdcard/") ||
++        android::base::StartsWith(path, "/storage/") ||
++        android::base::StartsWith(path, "/mnt/user/") ||
++        android::base::StartsWith(path, "/mnt/runtime/")) {
++        return false;
++    }
++    return path != "/sdcard" && path != "/storage" && path != "/mnt/user";
+ }
+ 
+ static bool update_capabilities(const char* path, uint64_t capabilities) {

@@ -179,3 +179,14 @@ object".  pisces.te now allows platform_app/sdcardd getattr/read/unlink on
 `unlabeled` and marks the type `mlstrustedobject` so the MLS check is
 bypassed.  Verified by deleting `ota-final2.zip` and `magisk.apk` from the
 host.
+
+## adb push to /sdcard (Windows GUI tools)
+
+Pushing to `/sdcard/...` failed with `remote fchown failed: Operation not
+permitted`, while `/data/local/tmp` worked.  `should_use_fs_config()` only
+excluded `/data/`, so adbd applied the `fs_config` row for `sdcard`
+(`root:root`) and tried `fchown(0,0)` as shell.  The fix excludes the
+FUSE-backed `/sdcard`, `/storage`, `/mnt/user` and `/mnt/runtime` paths,
+leaving uid/gid at -1 (no chown).  Patch:
+`patches/2026-11-13/adb-fsconfig.patch` (system/core/adb).  Verified with
+`adb push` to `/sdcard` and `/sdcard/Download`.

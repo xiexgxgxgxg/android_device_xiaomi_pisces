@@ -1183,7 +1183,7 @@ index 1fcd2a40..f47fb0ff 100644
  </policy>
 diff --git a/private/pisces.te b/private/pisces.te
 new file mode 100644
-index 00000000..c704f6d5
+index 00000000..e8b3166a
 --- /dev/null
 +++ b/private/pisces.te
 @@ -0,0 +1,324 @@
@@ -1344,7 +1344,7 @@ index 00000000..c704f6d5
 +# EACCES, which shows up as "MtpServer: ... Permission denied" and aborts the
 +# USB transfer.  The unlabeled rules cover files pushed by adb/TWRP before
 +# restorecon could run on this port.
-+allow sdcardd self:global_capability_class_set { dac_override fowner fsetid };
++allow sdcardd self:global_capability_class_set { dac_override fowner fsetid chown };
 +allow sdcardd unlabeled:file r_file_perms;
 +allow sdcardd unlabeled:dir r_dir_perms;
 +
