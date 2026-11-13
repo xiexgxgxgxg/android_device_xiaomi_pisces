@@ -1183,10 +1183,10 @@ index 1fcd2a40..f47fb0ff 100644
  </policy>
 diff --git a/private/pisces.te b/private/pisces.te
 new file mode 100644
-index 00000000..8b0fcd07
+index 00000000..14f633f0
 --- /dev/null
 +++ b/private/pisces.te
-@@ -0,0 +1,297 @@
+@@ -0,0 +1,303 @@
 +# pisces: workarounds caused by running a modern policy on a 3.4 kernel.
 +#
 +# On this kernel the per-node sysfs labels from genfs_contexts do not take
@@ -1484,6 +1484,12 @@ index 00000000..8b0fcd07
 +# carries one fails with "Error unparceling MemoryIntArray" and the telephony
 +# provider / CryptKeeper crash, which also leaves gsm.version.baseband unset.
 +allow zygote system_server:fd use;
++
++# MtpServer runs in the MediaProvider app process, which this port labels
++# platform_app (the mediaprovider domain is only used by
++# android.process.media).  Without this the MTP server cannot open
++# /dev/mtp_usb and the host sees a non-functional MTP interface.
++allow platform_app mtp_device:chr_file rw_file_perms;
 diff --git a/private/priv_app.te b/private/priv_app.te
 index 9ff8d091..7c9f281f 100644
 --- a/private/priv_app.te
@@ -2009,10 +2015,10 @@ index c7fa9a1f..41ed58db 100644
 +allow hal_light_default sysfs:file rw_file_perms;
 diff --git a/vendor/hal_usb_gadget_default.te b/vendor/hal_usb_gadget_default.te
 new file mode 100644
-index 00000000..441ab069
+index 00000000..3fbb8c02
 --- /dev/null
 +++ b/vendor/hal_usb_gadget_default.te
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,31 @@
 +# pisces: the USB gadget HAL ships as a vendor binary named
 +# android.hardware.usb.gadget@1.0-service.pisces.  AOSP's vendor policy has the
 +# hal_usb_gadget attributes but no default domain, so the binary stayed
@@ -2038,6 +2044,12 @@ index 00000000..441ab069
 +allow hal_usb_gadget_default adbd_socket:sock_file write;
 +allow hal_usb_gadget_default system_radio_prop:property_service set;
 +allow hal_usb_gadget_default ffs_prop:property_service set;
++# The pisces gadget HAL sets sys.usb.config / sys.usb.state from its binder
++# thread; the property type is already allowed, but the property service
++# socket itself was not, so every setCurrentUsbFunctions() failed with
++# EACCES and UsbDeviceManager fell back to charging-only.
++allow hal_usb_gadget_default property_socket:sock_file write;
++allow hal_usb_gadget_default init:unix_stream_socket connectto;
 diff --git a/vendor/hal_wifi_default.te b/vendor/hal_wifi_default.te
 index 75a98429..1469725c 100644
 --- a/vendor/hal_wifi_default.te

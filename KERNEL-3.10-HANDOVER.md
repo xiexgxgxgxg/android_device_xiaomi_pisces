@@ -274,3 +274,33 @@ adb shell getprop | grep -E 'init.svc|gsm.version'
 `gsm.version.baseband = DM_BASE_13A_8803G_W13.44 | 20140120092332`，
 `com.android.phone` 在 `u:r:radio:s0`，Enforcing；TWRP 刷 Magisk 31.1
 后在 app 内“直接安装”一次，首页显示 31.1 已安装、root 正常。
+
+---
+
+## 十二、USB / MTP（2026-11-13 追加）
+
+现象：设置里选“文件传输”要么闪退回充电模式，要么电脑能看到 MTP 设备但打不开。
+
+3.4 这套的链路：
+- `android.hardware.usb.gadget@1.0-service.pisces` 跑在
+  `u:r:hal_usb_gadget_default:s0`，负责写 `sys.usb.config`；
+- `android.hardware.usb@1.0-service` 跑在 `u:r:hal_usb_default:s0`；
+- `MtpServer` 在 MediaProvider 进程里，本 port 的 seapp 把它标成
+  `u:r:platform_app:s0`（`mediaprovider` 域只用于 `android.process.media`）。
+
+缺的三条策略（已固化在 `system/sepolicy`）：
+```
+allow hal_usb_gadget_default property_socket:sock_file write;
+allow hal_usb_gadget_default init:unix_stream_socket connectto;
+allow platform_app mtp_device:chr_file rw_file_perms;
+```
+没有前两条时 HAL 设 `sys.usb.config` 报 EACCES（`setCurrentUsbFunctions ... FAILED`），
+框架回退成“仅充电”；没有第三条时 `MtpServer: Failed to start usb driver!`
+（`/dev/mtp_usb` 打不开），主机能枚举接口但列不出文件。
+
+3.10 上 USB gadget 多半是 configfs + 不同的 HAL（`android.hardware.usb.gadget@1.1/1.2`），
+但同样的三件事必须确认：HAL 能写 `sys.usb.config`（property socket + 属性类型）、
+MTP server 的域能打开 `/dev/mtp_usb`、MTP 的 storage 是 `/storage/emulated/0` 且已解锁。
+验证：设备侧 `dumpsys usb` 里 `current_functions_applied=true`、
+`kernel_function_list=mtp,ffs`；主机侧 `gio mount -li` 能看到
+`mtp://Xiaomi_MI_3_095ac70c/`，`gio list` 能列出“内部共享存储空间”。

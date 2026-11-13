@@ -115,3 +115,22 @@ tree; the first full OTA build made them visible.  All are fixed now:
 After these, a clean data + clean OTA build boots with baseband
 `DM_BASE_13A_8803G_W13.44 | 20140120092332`, `com.android.phone` in
 `u:r:radio:s0`, and enforcing.
+
+## MTP / USB file transfer
+
+Selecting "File transfer" fell back to charging (or the PC saw the MTP
+interface but could not open it) because of three missing rules:
+
+```
+allow hal_usb_gadget_default property_socket:sock_file write;
+allow hal_usb_gadget_default init:unix_stream_socket connectto;
+allow platform_app mtp_device:chr_file rw_file_perms;
+```
+
+The gadget HAL could not set `sys.usb.config` (EACCES), so
+`setCurrentUsbFunctions()` failed and UsbDeviceManager reverted to charging.
+MtpServer runs in MediaProvider's `platform_app` process on this port (the
+`mediaprovider` domain is only used by `android.process.media`), so it also
+needed `/dev/mtp_usb`.  After the fix `dumpsys usb` reports
+`current_functions=MTP, current_functions_applied=true` and the host mounts
+`mtp://Xiaomi_MI_3_095ac70c/` with the internal storage listed.
