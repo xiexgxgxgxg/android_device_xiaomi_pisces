@@ -169,3 +169,13 @@ device` (read) or hung/EIO (write).  Two causes:
 
 Verified with a 438 MB file (the full OTA) in both directions: write to
 /sdcard and read back, SHA-256 matched.
+
+## Deleting adb/TWRP-pushed files from the PC
+
+Files pushed by adb/TWRP have no SELinux xattr and stay `unlabeled`, and
+platform_app runs at `s0:c512,c768` while those files are `s0`.  The
+`unlink` mlsconstrain requires `l1 eq l2`, so the PC got "could not delete
+object".  pisces.te now allows platform_app/sdcardd getattr/read/unlink on
+`unlabeled` and marks the type `mlstrustedobject` so the MLS check is
+bypassed.  Verified by deleting `ota-final2.zip` and `magisk.apk` from the
+host.

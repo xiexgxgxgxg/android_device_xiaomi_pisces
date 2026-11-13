@@ -1183,10 +1183,10 @@ index 1fcd2a40..f47fb0ff 100644
  </policy>
 diff --git a/private/pisces.te b/private/pisces.te
 new file mode 100644
-index 00000000..8f1755be
+index 00000000..c704f6d5
 --- /dev/null
 +++ b/private/pisces.te
-@@ -0,0 +1,310 @@
+@@ -0,0 +1,324 @@
 +# pisces: workarounds caused by running a modern policy on a 3.4 kernel.
 +#
 +# On this kernel the per-node sysfs labels from genfs_contexts do not take
@@ -1497,6 +1497,20 @@ index 00000000..8f1755be
 +# android.process.media).  Without this the MTP server cannot open
 +# /dev/mtp_usb and the host sees a non-functional MTP interface.
 +allow platform_app mtp_device:chr_file rw_file_perms;
++
++# Files pushed through adb/TWRP land in /data/media/0 without a SELinux
++# xattr and stay "unlabeled" (restorecon cannot relabel them on this port).
++# MtpServer still has to stat, read and unlink them when the PC manages the
++# internal storage, otherwise Explorer/gio report "could not delete object".
++allow platform_app unlabeled:file { getattr read open unlink };
++allow sdcardd unlabeled:file { r_file_perms unlink };
++allow sdcardd unlabeled:dir { r_dir_perms write add_name remove_name };
++
++# The files above are at level s0 while platform_app runs with MCS
++# categories (s0:c512,c768); the write/unlink mlsconstrain requires l1 eq l2,
++# so even the TE allow is not enough.  Exempt the already-mislabeled
++# "unlabeled" type from MLS so the PC can manage those files.
++typeattribute unlabeled mlstrustedobject;
 diff --git a/private/priv_app.te b/private/priv_app.te
 index 9ff8d091..7c9f281f 100644
 --- a/private/priv_app.te
