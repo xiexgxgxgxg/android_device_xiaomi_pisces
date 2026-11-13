@@ -190,3 +190,14 @@ FUSE-backed `/sdcard`, `/storage`, `/mnt/user` and `/mnt/runtime` paths,
 leaving uid/gid at -1 (no chown).  Patch:
 `patches/2026-11-13/adb-fsconfig.patch` (system/core/adb).  Verified with
 `adb push` to `/sdcard` and `/sdcard/Download`.
+
+## Audio: BT firmware download must stay disabled
+
+`persist.pisces.bt.skip_fw=0` (the BCM43341 HCD download enabled for BLE)
+makes the speaker silent under enforcing: the mixer/DAPM/ES325/CS42L73
+route still comes up (`spkr_en(gpio 108)=1`, bias level 3) and AudioTrack
+delivers frames, but nothing is audible.  The 1111 known-good package set
+`skip_fw=1`; restoring that restores sound immediately (tested under
+enforcing).  Keep `skip_fw=1` in init.pisces.rc; if BLE is needed later,
+load the firmware only after the audio route is up and re-run the speaker
+route, rather than downloading it during early boot.

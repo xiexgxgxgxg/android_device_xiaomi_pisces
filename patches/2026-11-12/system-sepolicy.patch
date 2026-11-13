@@ -1183,10 +1183,10 @@ index 1fcd2a40..f47fb0ff 100644
  </policy>
 diff --git a/private/pisces.te b/private/pisces.te
 new file mode 100644
-index 00000000..e8b3166a
+index 00000000..60b5a3ab
 --- /dev/null
 +++ b/private/pisces.te
-@@ -0,0 +1,324 @@
+@@ -0,0 +1,334 @@
 +# pisces: workarounds caused by running a modern policy on a 3.4 kernel.
 +#
 +# On this kernel the per-node sysfs labels from genfs_contexts do not take
@@ -1511,6 +1511,16 @@ index 00000000..e8b3166a
 +# so even the TE allow is not enough.  Exempt the already-mislabeled
 +# "unlabeled" type from MLS so the PC can manage those files.
 +typeattribute unlabeled mlstrustedobject;
++
++# init chmods /sys/kernel/debug/tracing/trace_marker to 0222 so the WebView
++# sandboxed renderer (uid 99xxx) can open it; w_file_perms does not include
++# setattr, so grant that explicitly.
++allow init debugfs_trace_marker:file { w_file_perms setattr };
++
++# webview_zygote reopens /system/bin/app_process32 on fork; without read
++# access the zygote aborts in nativeForkAndSpecialize and every WebView page
++# stays blank (Via loads the URL but renders nothing).
++allow webview_zygote zygote_exec:file r_file_perms;
 diff --git a/private/priv_app.te b/private/priv_app.te
 index 9ff8d091..7c9f281f 100644
 --- a/private/priv_app.te

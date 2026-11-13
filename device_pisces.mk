@@ -95,6 +95,7 @@ PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/ramdisk/init.quickboot.rc:root/init.quickboot.rc \
     $(LOCAL_PATH)/ramdisk/pisces_cpu.sh:root/pisces_cpu.sh \
     $(LOCAL_PATH)/bin/pisces_bt_perm.sh:system/bin/pisces_bt_perm.sh \
+    $(LOCAL_PATH)/bin/pisces_net.sh:system/bin/pisces_net.sh \
     $(LOCAL_PATH)/ramdisk/ueventd.pisces.rc:root/ueventd.pisces.rc
 
 # safe mount_ext4, dualboot/mount helper script

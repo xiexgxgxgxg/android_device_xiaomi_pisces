@@ -39,6 +39,10 @@ on early-init
     write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor interactive
     write /sys/devices/system/cpu/cpufreq/interactive/boost 1
     mount debugfs debugfs /sys/kernel/debug
+    # trace_marker is root:root 0220 by default; the WebView sandboxed
+    # renderer (uid 99xxx) opens it for atrace and Chromium treats EACCES as
+    # a fatal error, aborting the renderer and crashing every WebView app.
+    chmod 0222 /sys/kernel/debug/tracing/trace_marker
 
 on init
     mkdir /mnt/shell/emulated 0700 shell shell
@@ -141,7 +145,7 @@ on init
     # the chip runs its ROM firmware, which rejects the Broadcom BLE scan
     # filter commands ("bte_scan_filt_param_cfg_evt, 1") and discovery finds
     # nothing.  The download now completes in ~1.5 s without hanging the chip.
-    setprop persist.pisces.bt.skip_fw 0
+    setprop persist.pisces.bt.skip_fw 1
 
 
 
@@ -821,6 +825,11 @@ on boot
 # /data/misc/bluetooth/bdaddr is missing; the factory address ships next to the
 # BT config files.
 on post-fs-data
+    # pisces: let WebView read /data/local/tmp/webview-command-line; the
+    # Tegra 4 GL driver cannot create the Skia SharedContextState used by
+    # WebView 138 and the GPU thread segfaults.  The file forces software
+    # rendering (see the pisces_webview service).
+    setprop webview.command_line.enabled 1
     # files created before SELinux ever ran (the pre-policy era of this port)
     # carry no label, which leaves adbd unable to read its keys and the
     # framework unable to read app data.  Relabel the important corners.
@@ -934,8 +943,17 @@ service pisces_bt_perm /system/bin/sh /system/bin/pisces_bt_perm.sh
     oneshot
     disabled
 
+service pisces_net /system/bin/sh /system/bin/pisces_net.sh
+    class main
+    user shell
+    group shell
+    seclabel u:r:shell:s0
+    oneshot
+    disabled
+
 on property:sys.boot_completed=1
     start pisces_bt_perm
+    start pisces_net
     # pisces: four cores are kept online by pisces_cpu.sh; re-assert the
     # battery-safe frequency cap for the case where a core was re-onlined
     # later (a new cpufreq policy starts at 1.8 GHz, which resets the phone).
