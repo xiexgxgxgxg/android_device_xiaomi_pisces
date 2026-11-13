@@ -1183,10 +1183,10 @@ index 1fcd2a40..f47fb0ff 100644
  </policy>
 diff --git a/private/pisces.te b/private/pisces.te
 new file mode 100644
-index 00000000..14f633f0
+index 00000000..8f1755be
 --- /dev/null
 +++ b/private/pisces.te
-@@ -0,0 +1,303 @@
+@@ -0,0 +1,310 @@
 +# pisces: workarounds caused by running a modern policy on a 3.4 kernel.
 +#
 +# On this kernel the per-node sysfs labels from genfs_contexts do not take
@@ -1339,7 +1339,14 @@ index 00000000..14f633f0
 +# The FUSE storage daemon chowns/chmods /data/media/0/DCIM/Camera when the
 +# camera app creates it; without CAP_FOWNER the chmod fails and the directory
 +# keeps the wrong mode ("sdcard: chmod failed ... Operation not permitted").
-+allow sdcardd self:global_capability_class_set { dac_override fowner };
++# sdcardd (the FUSE daemon behind /storage/emulated) needs fsetid as well as
++# dac_override/fowner: without it open/create on behalf of an app fails with
++# EACCES, which shows up as "MtpServer: ... Permission denied" and aborts the
++# USB transfer.  The unlabeled rules cover files pushed by adb/TWRP before
++# restorecon could run on this port.
++allow sdcardd self:global_capability_class_set { dac_override fowner fsetid };
++allow sdcardd unlabeled:file r_file_perms;
++allow sdcardd unlabeled:dir r_dir_perms;
 +
 +# CameraService walks /sys/class/leds while resolving the torch target (it is
 +# a symlink to /sys/devices/virtual/leds, which is now labeled sysfs_leds).

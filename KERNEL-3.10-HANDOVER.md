@@ -327,3 +327,15 @@ unzip -p ota.zip system/build.prop | grep ro.build.fingerprint
 grep ro.vendor.build.fingerprint out/target/product/pisces/system/vendor/build.prop
 ```
 两者必须完全一致，`ro.build.version.incremental` 也要一致。
+
+### MTP 大文件传输（2026-11-13 追加）
+
+3.4 的 legacy `f_mtp` 在 workqueue 里做 `vfs_read/vfs_write`，凭据是
+kworker/root；而 `/storage/emulated/0` 是 FUSE，sdcardd 按调用者凭据校验，
+于是读返回 EACCES、写返回 EIO，表现为 MTP 能列目录但传不了文件。
+内核修复：`drivers/usb/gadget/f_mtp.c` 的 `send_file_work` /
+`receive_file_work` 在 vfs 调用前后
+`override_creds(filp->f_cred)` / `revert_creds()`。
+另外 sdcardd 需要 `fsetid`（以及旧 unlabeled 文件的读权限）。
+3.10 如果改用 FunctionFS（MtpFfsHandle）通常不会踩这个 workqueue 凭据坑，
+但若继续用 legacy `/dev/mtp_usb`，这个修复必须带上。

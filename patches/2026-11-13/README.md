@@ -149,3 +149,23 @@ BUILD_FINGERPRINT := Xiaomi/lineage_pisces/pisces:9/PQ3A.190801.002/xie11122044:
 so both files are identical (`ro.build.fingerprint` ==
 `ro.vendor.build.fingerprint`, same incremental).  Always check both after a
 build; `/vendor` on this device is a symlink to `/system/vendor`.
+
+## MTP data transfers (GET_OBJECT / SendObject)
+
+Listing worked but transfers failed with `libmtp: Could not get file from
+device` (read) or hung/EIO (write).  Two causes:
+
+1. The 3.4 legacy `f_mtp` does `vfs_read`/`vfs_write` on a workqueue
+   (kworker/root).  `/storage/emulated/0` is FUSE-backed and sdcardd checks
+   the caller's credentials, so every file transfer was rejected
+   (`MtpServer: Mtp send file got error Permission denied`, or
+   `request read ... EIO`).  Fixed in
+   `android_kernel_xiaomi_pisces`:
+   `drivers/usb/gadget/f_mtp.c` now wraps both vfs calls in
+   `override_creds(filp->f_cred)` / `revert_creds()`.
+2. sdcardd lacked `fsetid` (and read access to old `unlabeled` files pushed
+   by adb/TWRP), which made open/create on behalf of apps fail.  Added to
+   pisces.te.
+
+Verified with a 438 MB file (the full OTA) in both directions: write to
+/sdcard and read back, SHA-256 matched.
