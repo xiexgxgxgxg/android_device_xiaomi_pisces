@@ -134,6 +134,11 @@ on fs
 
     rm /dev/sysmatdrv
 
+# pisces debugging: `adb shell setprop debug.pisces.reload_fw 1` re-runs the
+# ES325 loader without rebooting (reset the property to 0 before reusing it).
+on property:debug.pisces.reload_fw=1
+    start audience_fw
+
 on early-boot
     # pisces: run these in the background; the audience firmware loader can
     # block forever on the ES325 UART, which hangs init and resets the device.
@@ -963,6 +968,14 @@ on property:sys.boot_completed=1
     start pisces_bt_perm
     start pisces_net
     start pisces_audio_prime
+    # pisces: re-run the ES325 firmware download now that the framework is up.
+    # The early-boot run happens while the driver still believes the DSP is
+    # ACTIVE (es325_core_probe() sets power_state = POWER_STATE_ACTIVE), so no
+    # es325_sync() is done and the DSP is left un-synced: the firmware version
+    # and every mixer/DAPM state look correct, but the speaker stays silent.
+    # Running vpcmd again here makes the driver do a real wakeup+sync and the
+    # audio path comes alive (verified: enforcing, across warm and cold boots).
+    start audience_fw
     # pisces: four cores are kept online by pisces_cpu.sh; re-assert the
     # battery-safe frequency cap for the case where a core was re-onlined
     # later (a new cpufreq policy starts at 1.8 GHz, which resets the phone).
