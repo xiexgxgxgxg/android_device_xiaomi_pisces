@@ -1,0 +1,102 @@
+diff --git a/graphics/composer/2.1/utils/hal/include/composer-hal/2.1/ComposerResources.h b/graphics/composer/2.1/utils/hal/include/composer-hal/2.1/ComposerResources.h
+index 7bb36929..8c3bb649 100644
+--- a/graphics/composer/2.1/utils/hal/include/composer-hal/2.1/ComposerResources.h
++++ b/graphics/composer/2.1/utils/hal/include/composer-hal/2.1/ComposerResources.h
+@@ -23,11 +23,15 @@
+ #include <memory>
+ #include <mutex>
+ #include <unordered_map>
++#include <unordered_set>
+ #include <vector>
+ 
+ #include <android/hardware/graphics/mapper/2.0/IMapper.h>
+ #include <log/log.h>
+ 
++#include <thread>
++#include <unistd.h>
++
+ namespace android {
+ namespace hardware {
+ namespace graphics {
+@@ -66,7 +70,32 @@ class ComposerHandleImporter {
+ 
+     void freeBuffer(const native_handle_t* bufferHandle) {
+         if (bufferHandle) {
+-            mMapper->freeBuffer(static_cast<void*>(const_cast<native_handle_t*>(bufferHandle)));
++            /* pisces: the 2013 gralloc crashes in NvGrUnregisterBuffer when a
++             * handle is unregistered twice.  The same buffer can be dropped by
++             * several ComposerHandleCache instances (layer cache, client
++             * target cache, ...), so dedup process-wide, not per cache. */
++            static std::unordered_set<const void*> freed;
++            void* handle = const_cast<native_handle_t*>(bufferHandle);
++            auto it = freed.find(handle);
++            if (it != freed.end()) {
++                ALOGW("freeBuffer: skipping already freed handle %p", handle);
++                return;
++            }
++            freed.insert(handle);
++            /* pisces: the vendor HWC keeps a layer's buffer handle for a
++             * frame or two after the composer replaced it.  freeBuffer ->
++             * NvGrUnregisterBuffer munmaps the handle's fence page, and the
++             * still-pending hwc_set_display then calls NvGrAddFence on that
++             * handle and dereferences the unmapped page (SIGSEGV in the
++             * composer -> SurfaceFlinger aborts -> soft reboot, or a stuck
++             * gralloc buffer lock that freezes the UI).  Keep the
++             * registration alive for a few more frames and unregister from a
++             * helper thread instead. */
++            auto mapper = mMapper;
++            std::thread([mapper, handle]() {
++                usleep(3000000);
++                mapper->freeBuffer(handle);
++            }).detach();
+         }
+     }
+ 
+@@ -110,11 +139,31 @@ class ComposerHandleCache {
+ 
+     ~ComposerHandleCache() {
+         switch (mHandleType) {
+-            case HandleType::BUFFER:
++            case HandleType::BUFFER: {
++                /* pisces: the 2013 gralloc crashes in NvGrUnregisterBuffer when
++                 * the same native_handle ends up in two slots (setting the
++                 * same buffer twice leaves a freed handle in the cache, and
++                 * the gralloc unregister path dereferences it).  Free each
++                 * handle at most once. */
++                std::vector<const native_handle_t*> freed;
+                 for (auto handle : mHandles) {
+-                    mImporter.freeBuffer(handle);
++                    if (handle == nullptr) {
++                        continue;
++                    }
++                    bool seen = false;
++                    for (auto f : freed) {
++                        if (f == handle) {
++                            seen = true;
++                            break;
++                        }
++                    }
++                    if (!seen) {
++                        freed.push_back(handle);
++                        mImporter.freeBuffer(handle);
++                    }
+                 }
+                 break;
++            }
+             case HandleType::STREAM:
+                 for (auto handle : mHandles) {
+                     mImporter.freeStream(handle);
+@@ -153,7 +202,12 @@ class ComposerHandleCache {
+                       const native_handle** outReplacedHandle) {
+         if (slot < mHandles.size()) {
+             auto& cachedHandle = mHandles[slot];
+-            *outReplacedHandle = cachedHandle;
++            /* pisces: importBuffer() returns the same handle when the layer
++             * keeps the same buffer, and the caller frees whatever we report
++             * as replaced.  Reporting the identical handle made the caller
++             * free the handle that stays in the cache, so destroying the
++             * layer freed it a second time and the old gralloc crashed. */
++            *outReplacedHandle = (cachedHandle == handle) ? nullptr : cachedHandle;
+             cachedHandle = handle;
+             return Error::NONE;
+         } else {
