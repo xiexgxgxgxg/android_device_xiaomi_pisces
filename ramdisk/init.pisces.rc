@@ -852,6 +852,13 @@ on post-fs-data
     copy /system/etc/bluetooth/bdaddr /data/misc/bluetooth/bdaddr
     chown bluetooth bluetooth /data/misc/bluetooth/bdaddr
     chmod 0660 /data/misc/bluetooth/bdaddr
+    # pisces: on a freshly formatted /data the directory does not exist yet when
+    # the restorecon above runs, so the label it gets there is whatever the
+    # parent dir has.  Label the directory and the address file once they exist,
+    # otherwise hal_bluetooth_default cannot read bdaddr and the A9 stack aborts
+    # with "Open: No Bluetooth Address!" (Bluetooth will not turn on).
+    restorecon /data/misc/bluetooth
+    restorecon /data/misc/bluetooth/bdaddr
 
 on property:init.svc.charger=running
     write /sys/class/input/input1/enabled 0
