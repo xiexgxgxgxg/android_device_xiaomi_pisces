@@ -955,12 +955,12 @@ on property:sys.boot_completed=1
     start pisces_bt_perm
     start pisces_net
     # pisces: re-run the ES325 firmware download now that the framework is up.
-    # The early-boot run happens while the driver still believes the DSP is
-    # ACTIVE (es325_core_probe() sets power_state = POWER_STATE_ACTIVE), so no
-    # es325_sync() is done and the DSP is left un-synced: the firmware version
-    # and every mixer/DAPM state look correct, but the speaker stays silent.
-    # Running vpcmd again here makes the driver do a real wakeup+sync and the
-    # audio path comes alive (verified: enforcing, across warm and cold boots).
+    # The early-boot run happens while es325_core_probe() still has power_state
+    # = POWER_STATE_ACTIVE, so es325_wakeup() short-circuits and no es325_sync()
+    # is done: the DSP keeps a valid firmware version and the mixer/DAPM chain
+    # powers up, but the I2S bypass is never established and the speaker is
+    # silent.  By now the driver is in SLEEP, so this run performs a real
+    # wakeup+sync and the audio path comes alive.
     start audience_fw
     # pisces: four cores are kept online by pisces_cpu.sh; re-assert the
     # battery-safe frequency cap for the case where a core was re-onlined

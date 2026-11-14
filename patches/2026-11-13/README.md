@@ -230,12 +230,36 @@ though DAPM/spkr_en/bias looked right.  `es325_wakeup()` now waits after the
 download and retries `es325_sync()`; the first play recovers without any
 manual tinymix.  Verified with repeated warm reboots.
 
-## Enforcing still silences the speaker (permissive works)
+## Enforcing silences the speaker: the ES325 is never synced
 
-The 1111 package and the final 66 system are both audible under
-`androidboot.selinux=permissive`; the same 66 system under enforcing is
-silent even with stock ES325, vdd_sys_audio reset and the sync retry.  No
-audio-related `avc: denied` is logged, so the denial is hidden by dontaudit
-or a service that fails to start.  The final image therefore ships
-permissive until that rule is identified; do not claim enforcing audio is
-fixed.
+Symptom: the same boot/system is audible under `androidboot.selinux=permissive`
+and completely silent under `enforcing`, while every visible state looks
+correct: `fw_version` returns the M80.3.0.46 image, the whole `tinymix` state
+is identical, DAPM powers the speaker path (`bias level 3`,
+`spkr_en(gpio 108) = 1`, `vdd_sys_audio on`), the HAL gets `out_write()` data
+and no audio-related `avc: denied` is logged.
+
+That is not a policy denial.  Rebuilding the policy with `secilc -D` (no
+dontaudit rules) and disabling logd's audit rate limit (5/s, backlog 64, which
+was dropping ~1300 boot-time denials) still produced no denial from
+`audioserver`, `hal_audio_default` or `es325_fw`, and no failed audio init
+command.  The real cause is in the driver: `es325_core_probe()` sets
+`power_state = POWER_STATE_ACTIVE`, so the first `es325_wakeup()` returns
+immediately and the early-boot vpcmd UART download never performs an
+`es325_sync()`.  The DSP keeps a valid firmware version and the mixer/DAPM
+chain powers up, but its I2S bypass is never established, so the codec gets
+no audio.  Permissive only "works" because its slower boot happens to avoid
+that state, which is why the failure looked SELinux-specific.
+
+Fix: run the loader a second time at `sys.boot_completed`.  By then the driver
+is in `POWER_STATE_SLEEP` (vpcmd wrote `/sys/esxxx/sleep`), so that run does a
+real `es325_wakeup()` + `es325_sync()` and the speaker comes alive:
+
+    on property:sys.boot_completed=1
+        ...
+        start audience_fw
+
+Verified under enforcing across warm reboots and a cold boot; the image ships
+enforcing again.  The `pisces_audio_prime` workaround (start the Eleven
+preview with a silent WAV, force-stop the music apps, cycle the speaker pin)
+is no longer needed and was removed.
