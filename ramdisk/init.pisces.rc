@@ -134,11 +134,6 @@ on fs
 
     rm /dev/sysmatdrv
 
-# pisces debugging: `adb shell setprop debug.pisces.reload_fw 1` re-runs the
-# ES325 loader without rebooting (reset the property to 0 before reusing it).
-on property:debug.pisces.reload_fw=1
-    start audience_fw
-
 on early-boot
     # pisces: run these in the background; the audience firmware loader can
     # block forever on the ES325 UART, which hangs init and resets the device.
@@ -956,18 +951,9 @@ service pisces_net /system/bin/sh /system/bin/pisces_net.sh
     oneshot
     disabled
 
-service pisces_audio_prime /system/bin/sh /system/bin/pisces_audio_prime.sh
-    class main
-    user shell
-    group shell audio
-    seclabel u:r:shell:s0
-    oneshot
-    disabled
-
 on property:sys.boot_completed=1
     start pisces_bt_perm
     start pisces_net
-    start pisces_audio_prime
     # pisces: re-run the ES325 firmware download now that the framework is up.
     # The early-boot run happens while the driver still believes the DSP is
     # ACTIVE (es325_core_probe() sets power_state = POWER_STATE_ACTIVE), so no
