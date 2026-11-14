@@ -55,6 +55,14 @@ TARGET_ENABLE_NON_PIE_SUPPORT := true
 # logd
 TARGET_USES_LOGD := false
 
+# netd: on the 3.4 kernel the gateway of a route is resolved through the main
+# table (the kernel only creates connected routes there), so netd has to install
+# the RULE_PRIORITY_DIRECTLY_CONNECTED "lookup main" rule.  Without it every
+# default route via the DHCP gateway fails with ENETUNREACH ("Error adding
+# route 0.0.0.0/0 -> <gw> wlan0 to table 1007: Network is unreachable"), the
+# device keeps only its subnet route and cannot reach DNS or the internet.
+TARGET_NEEDS_NETD_DIRECT_CONNECT_RULE := true
+
 # kernel: built from source (merged 3.4.113 tree)
 TARGET_KERNEL_SOURCE := kernel/xiaomi/pisces
 TARGET_KERNEL_CONFIG := tegra11_pisces_user_defconfig
