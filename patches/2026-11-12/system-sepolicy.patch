@@ -1183,10 +1183,10 @@ index 1fcd2a40..f47fb0ff 100644
  </policy>
 diff --git a/private/pisces.te b/private/pisces.te
 new file mode 100644
-index 00000000..60b5a3ab
+index 00000000..6edcf06f
 --- /dev/null
 +++ b/private/pisces.te
-@@ -0,0 +1,334 @@
+@@ -0,0 +1,340 @@
 +# pisces: workarounds caused by running a modern policy on a 3.4 kernel.
 +#
 +# On this kernel the per-node sysfs labels from genfs_contexts do not take
@@ -1347,6 +1347,12 @@ index 00000000..60b5a3ab
 +allow sdcardd self:global_capability_class_set { dac_override fowner fsetid chown };
 +allow sdcardd unlabeled:file r_file_perms;
 +allow sdcardd unlabeled:dir r_dir_perms;
++
++# pisces: init recreates /data/misc/bluetooth/bdaddr on a freshly formatted
++# /data (copy builtin).  Without this the copy is denied, the file is missing
++# and the A9 Bluetooth HAL aborts with "Open: No Bluetooth Address!".
++allow init bluetooth_data_file:dir create_dir_perms;
++allow init bluetooth_data_file:file create_file_perms;
 +
 +# CameraService walks /sys/class/leds while resolving the torch target (it is
 +# a symlink to /sys/devices/virtual/leds, which is now labeled sysfs_leds).

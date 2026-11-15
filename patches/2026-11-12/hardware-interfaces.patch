@@ -217,10 +217,10 @@ index 36aa64ef..e04ef6ff 100644
              mWriter.setPresentFence(presentFence);
              mWriter.setReleaseFences(layers, fences);
 diff --git a/graphics/composer/2.1/utils/hal/include/composer-hal/2.1/ComposerResources.h b/graphics/composer/2.1/utils/hal/include/composer-hal/2.1/ComposerResources.h
-index 7bb36929..4552b4d8 100644
+index 7bb36929..8c3bb649 100644
 --- a/graphics/composer/2.1/utils/hal/include/composer-hal/2.1/ComposerResources.h
 +++ b/graphics/composer/2.1/utils/hal/include/composer-hal/2.1/ComposerResources.h
-@@ -23,6 +23,7 @@
+@@ -23,11 +23,15 @@
  #include <memory>
  #include <mutex>
  #include <unordered_map>
@@ -228,7 +228,15 @@ index 7bb36929..4552b4d8 100644
  #include <vector>
  
  #include <android/hardware/graphics/mapper/2.0/IMapper.h>
-@@ -66,7 +67,19 @@ class ComposerHandleImporter {
+ #include <log/log.h>
+ 
++#include <thread>
++#include <unistd.h>
++
+ namespace android {
+ namespace hardware {
+ namespace graphics {
+@@ -66,7 +70,32 @@ class ComposerHandleImporter {
  
      void freeBuffer(const native_handle_t* bufferHandle) {
          if (bufferHandle) {
@@ -245,11 +253,24 @@ index 7bb36929..4552b4d8 100644
 +                return;
 +            }
 +            freed.insert(handle);
-+            mMapper->freeBuffer(handle);
++            /* pisces: the vendor HWC keeps a layer's buffer handle for a
++             * frame or two after the composer replaced it.  freeBuffer ->
++             * NvGrUnregisterBuffer munmaps the handle's fence page, and the
++             * still-pending hwc_set_display then calls NvGrAddFence on that
++             * handle and dereferences the unmapped page (SIGSEGV in the
++             * composer -> SurfaceFlinger aborts -> soft reboot, or a stuck
++             * gralloc buffer lock that freezes the UI).  Keep the
++             * registration alive for a few more frames and unregister from a
++             * helper thread instead. */
++            auto mapper = mMapper;
++            std::thread([mapper, handle]() {
++                usleep(3000000);
++                mapper->freeBuffer(handle);
++            }).detach();
          }
      }
  
-@@ -110,11 +123,31 @@ class ComposerHandleCache {
+@@ -110,11 +139,31 @@ class ComposerHandleCache {
  
      ~ComposerHandleCache() {
          switch (mHandleType) {
@@ -283,7 +304,7 @@ index 7bb36929..4552b4d8 100644
              case HandleType::STREAM:
                  for (auto handle : mHandles) {
                      mImporter.freeStream(handle);
-@@ -153,7 +186,12 @@ class ComposerHandleCache {
+@@ -153,7 +202,12 @@ class ComposerHandleCache {
                        const native_handle** outReplacedHandle) {
          if (slot < mHandles.size()) {
              auto& cachedHandle = mHandles[slot];
@@ -646,6 +667,118 @@ index 33c914dd..f2106876 100644
          framebuffer_device_t* device;
          int error = framebuffer_open(module, &device);
          if (error) {
+diff --git a/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h b/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
+index 7369ac75..21e4f42f 100644
+--- a/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
++++ b/graphics/mapper/2.0/utils/passthrough/include/mapper-passthrough/2.0/Gralloc0Hal.h
+@@ -20,6 +20,10 @@
+ #endif
+ 
+ #include <inttypes.h>
++#include <unistd.h>
++
++#include <mutex>
++#include <unordered_set>
+ 
+ #include <hardware/gralloc.h>
+ #include <log/log.h>
+@@ -73,6 +77,35 @@ class Gralloc0HalImpl : public Hal {
+         return Error::NONE;
+     }
+ 
++    /*
++     * pisces: bookkeeping for buffers this process imported.
++     *
++     * The composer HAL keeps its own copy of every layer buffer handle and
++     * calls freeBuffer() on it when the layer goes away.  NvGrUnregisterBuffer()
++     * assumes it is looking at a handle that NvGrRegisterBuffer() set up in
++     * *this* process (it reads the fence page pointer at offset 0x80 and the
++     * remap bookkeeping at 0xb4); running it twice - or on a copy that was
++     * never registered here - dereferences stale memory:
++     *
++     *   NvGrUnregisterBuffer+26: ldr r3, [handle, #0x80]
++     *                            ldr r0, [r3, #0x10]   <- SIGSEGV
++     *
++     * which takes down the composer service, then SurfaceFlinger, then zygote
++     * (surfaceflinger.rc has "onrestart restart zygote") - the soft reboot.
++     *
++     * Track every clone we registered, and only unregister a handle that is
++     * still in that set.  A duplicate free is then a no-op instead of a crash.
++     */
++    static std::unordered_set<const native_handle_t*>& liveHandles() {
++        static std::unordered_set<const native_handle_t*> handles;
++        return handles;
++    }
++
++    static std::mutex& liveHandlesMutex() {
++        static std::mutex mutex;
++        return mutex;
++    }
++
+     Error importBuffer(const native_handle_t* rawHandle,
+                        native_handle_t** outBufferHandle) override {
+         native_handle_t* bufferHandle = native_handle_clone(rawHandle);
+@@ -80,19 +113,58 @@ class Gralloc0HalImpl : public Hal {
+             return Error::NO_RESOURCES;
+         }
+ 
+-        if (mModule->registerBuffer(mModule, bufferHandle)) {
++        // pisces: the legacy gralloc occasionally fails registerBuffer with
++        // ENOMEM under concurrent allocation; retry a few times before giving
++        // up so a transient failure does not kill the client.
++        int reg = 0;
++        for (int attempt = 0; attempt < 8; attempt++) {
++            reg = mModule->registerBuffer(mModule, bufferHandle);
++            if (reg == 0) {
++                break;
++            }
++            usleep(2000);
++        }
++        if (reg) {
++            ALOGE("pisces: registerBuffer failed after retries: %d", reg);
+             native_handle_close(bufferHandle);
+             native_handle_delete(bufferHandle);
+             return Error::BAD_BUFFER;
+         }
+ 
+-        *outBufferHandle = bufferHandle;
++        {
++            std::lock_guard<std::mutex> lock(liveHandlesMutex());
++            liveHandles().insert(bufferHandle);
++            ALOGV("pisces: import %p id=%d fence=%p live=%zu", bufferHandle,
++                  bufferHandle->data[0],
++                  reinterpret_cast<void*>(bufferHandle->data[29]),
++                  liveHandles().size());
++        }
+ 
++        *outBufferHandle = bufferHandle;
+         return Error::NONE;
+     }
+ 
+     Error freeBuffer(native_handle_t* bufferHandle) override {
++        bool live;
++        {
++            std::lock_guard<std::mutex> lock(liveHandlesMutex());
++            live = liveHandles().erase(bufferHandle) > 0;
++            ALOGV("pisces: free %p id=%d fence=%p live=%d remaining=%zu", bufferHandle,
++                  bufferHandle->data[0],
++                  reinterpret_cast<void*>(bufferHandle->data[29]),
++                  live ? 1 : 0, liveHandles().size());
++        }
++
++        if (!live) {
++            // pisces: already freed (or never registered here).  Calling
++            // NvGrUnregisterBuffer() again munmaps the fence page a second
++            // time and segfaults; just drop the duplicate.
++            ALOGE("pisces: duplicate freeBuffer(%p), skipping unregister", bufferHandle);
++            return Error::NONE;
++        }
++
+         if (mModule->unregisterBuffer(mModule, bufferHandle)) {
++            ALOGE("pisces: unregisterBuffer(%p) failed", bufferHandle);
+             return Error::BAD_BUFFER;
+         }
+ 
 diff --git a/usb/1.0/default/Usb.cpp b/usb/1.0/default/Usb.cpp
 index 6eb88428..310e1119 100644
 --- a/usb/1.0/default/Usb.cpp
