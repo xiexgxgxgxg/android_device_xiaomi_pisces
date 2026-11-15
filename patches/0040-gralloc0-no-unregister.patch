@@ -76,7 +76,7 @@ index 7369ac75..3cb98f1e 100644
 +        {
 +            std::lock_guard<std::mutex> lock(liveHandlesMutex());
 +            liveHandles().insert(bufferHandle);
-+            ALOGE("pisces: import %p id=%d fence=%p live=%zu", bufferHandle,
++            ALOGV("pisces: import %p id=%d fence=%p live=%zu", bufferHandle,
 +                  bufferHandle->data[0],
 +                  reinterpret_cast<void*>(bufferHandle->data[29]),
 +                  liveHandles().size());
@@ -91,7 +91,7 @@ index 7369ac75..3cb98f1e 100644
 +        {
 +            std::lock_guard<std::mutex> lock(liveHandlesMutex());
 +            live = liveHandles().erase(bufferHandle) > 0;
-+            ALOGE("pisces: free %p id=%d fence=%p live=%d remaining=%zu", bufferHandle,
++            ALOGV("pisces: free %p id=%d fence=%p live=%d remaining=%zu", bufferHandle,
 +                  bufferHandle->data[0],
 +                  reinterpret_cast<void*>(bufferHandle->data[29]),
 +                  live ? 1 : 0, liveHandles().size());
